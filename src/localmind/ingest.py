@@ -218,7 +218,8 @@ def _with_ocr(
     found: dict[int, OcrPage] = {}
     to_read = []
     for page_no in wanted:
-        cached = catalog.ocr_cached(file_hash, page_no)
+        engine_name = ocr.engine.name if ocr.engine is not None else None
+        cached = catalog.ocr_cached(file_hash, page_no, engine_name)
         if cached is not None:
             found[page_no] = cached
         else:
@@ -236,7 +237,17 @@ def _read_pages(
     engine = ocr.engine
     assert engine is not None
     results: dict[int, OcrPage] = {}
-    for page_no, image in render_pages(path, page_numbers):
+    pages = render_pages(path, page_numbers)
+    while True:
+        try:
+            page_no, image = next(pages)
+        except StopIteration:
+            break
+        except Exception as exc:  # truncated scan, pdfium error: fail what is left
+            logger.warning("cannot render %s: %s", path, exc.__class__.__name__)
+            for left in page_numbers:
+                results.setdefault(left, OcrPage("", -1.0, engine.name))
+            break
         if ocr.on_page is not None:
             ocr.on_page(path, page_no)
         try:

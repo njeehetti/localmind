@@ -199,7 +199,7 @@ def _cmd_quarantine_list(args: argparse.Namespace) -> int:
 
     print(f"\nSet-aside pages ({len(pages)}):")
     for page in pages:
-        conf = f" {page.ocr_confidence:.0%}".replace("%", " %") if page.ocr_confidence else ""
+        conf = f" {page.ocr_confidence:.0%}".replace("%", " %") if page.ocr_confidence is not None else ""
         print(f"    {page.path}  page {page.page_no}  [{page.reason}{conf}]")
 
     print(f"\nSensitive data, kept and flagged ({len(flags)}):")

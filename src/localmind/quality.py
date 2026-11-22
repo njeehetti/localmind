@@ -182,7 +182,8 @@ def _judge_page(
         if reason is None and not accepted and is_garbled(ocr.text, config):
             reason = Reason.GARBLED
         spans = find_sensitive(ocr.text) if reason is None else ()
-        return PageVerdict(page_no, ocr.text, reason, spans, "ocr", ocr.engine, ocr.confidence)
+        confidence = ocr.confidence if ocr.confidence >= 0 else None  # failed: unknown
+        return PageVerdict(page_no, ocr.text, reason, spans, "ocr", ocr.engine, confidence)
 
     if lacks_text:
         return PageVerdict(page_no, text, Reason.NEEDS_OCR)  # level A

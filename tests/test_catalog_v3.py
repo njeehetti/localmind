@@ -166,3 +166,16 @@ def test_ocr_candidates_exclude_other_reasons(cat):
     cat.record_quarantine(Path("/x/log.txt"), "h4", 10, Reason.MACHINE_LOG)
     assert [r.path.name for r in cat.ocr_candidates()] == ["photo.jpg", "s.pdf"]
     assert cat.ocr_pending() == PendingOcr(pages=2, files=2)
+
+
+def test_v2_to_v3_script_sets_the_version_in_the_same_transaction(tmp_path):
+    # A crash between the migration and a later "PRAGMA user_version" would
+    # re-run the script on next open and fail on "duplicate column".
+    from localmind.catalog import _V2_TO_V3
+
+    db = tmp_path / "c.db"
+    make_v2_catalog(db)
+    con = sqlite3.connect(db)
+    con.executescript("BEGIN;" + _V2_TO_V3 + "COMMIT;")
+    assert con.execute("PRAGMA user_version").fetchone()[0] == 3
+    con.close()

@@ -149,7 +149,8 @@ def _extract_image(path: Path) -> ExtractedText:
         with Image.open(path) as img:
             img.load()  # decode now: a truncated file fails here, not later
             frames = getattr(img, "n_frames", 1)
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
+    except (UnidentifiedImageError, OSError, ValueError, TypeError, SyntaxError, EOFError,
+            Image.DecompressionBombError) as exc:  # too large, truncated, malformed
         raise ExtractionError(f"unreadable image: {exc.__class__.__name__}") from exc
     return ExtractedText(
         pages=("",) * frames, kind="image", image_pages=frozenset(range(1, frames + 1))

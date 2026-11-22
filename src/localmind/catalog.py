@@ -111,6 +111,7 @@ INSERT INTO pages_new (id, document_id, page_no, text, status, reason)
 DROP TABLE pages;
 ALTER TABLE pages_new RENAME TO pages;
 ALTER TABLE files ADD COLUMN page_count INTEGER;
+PRAGMA user_version = 3;
 """.replace("{pages_columns}", _PAGES_COLUMNS)
 
 
@@ -378,12 +379,16 @@ class Catalog:
         counts = [n for path, n in rows if _is_under(Path(path), under)]
         return PendingOcr(pages=sum(counts), files=len(counts))
 
-    def ocr_cached(self, file_hash: str, page_no: int) -> OcrPage | None:
+    def ocr_cached(
+        self, file_hash: str, page_no: int, engine: str | None = None
+    ) -> OcrPage | None:
+        """The OCR result of that page by ``engine``; with no engine given, the
+        latest result of any engine (so cached text applies without the extra)."""
         row = self._conn.execute(
             """SELECT text, confidence, engine FROM ocr_cache
-               WHERE file_hash = ? AND page_no = ?
+               WHERE file_hash = ? AND page_no = ? AND (? IS NULL OR engine = ?)
                ORDER BY created_at DESC, rowid DESC LIMIT 1""",
-            (file_hash, page_no),
+            (file_hash, page_no, engine, engine),
         ).fetchone()
         return OcrPage(*row) if row else None
 

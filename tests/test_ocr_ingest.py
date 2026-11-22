@@ -194,3 +194,55 @@ def test_quarantined_scan_records_its_page_count(catalog, inbox):
     (inbox / "scan.pdf").write_bytes(make_pdf(["", "", "", ""]))
     ingest(inbox, catalog)
     assert catalog.ocr_pending((inbox / "scan.pdf").resolve()).pages == 4
+
+
+# -- final review fixes ------------------------------------------------------
+
+
+def test_too_large_image_is_quarantined_and_the_run_goes_on(catalog, inbox, monkeypatch):
+    # Pillow refuses images far above MAX_IMAGE_PIXELS (DecompressionBombError).
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 1000)
+    Image.new("RGB", (200, 200), "white").save(inbox / "a_huge.png")
+    (inbox / "z_note.txt").write_text(GOOD, encoding="utf-8")
+    report = ingest(inbox, catalog)
+    assert reasons(report)["a_huge.png"] is Reason.CORRUPTED
+    assert catalog.document_for_path((inbox / "z_note.txt").resolve()) is not None
+
+
+def test_render_failure_sets_pages_aside_and_the_run_goes_on(catalog, inbox, monkeypatch):
+    import localmind.rendering as rendering
+
+    real = rendering.render_pages
+
+    def flaky(path, page_numbers, dpi=300):
+        if path.name == "a_bad.pdf":
+            raise OSError("image file is truncated")
+        yield from real(path, page_numbers, dpi)
+
+    monkeypatch.setattr(rendering, "render_pages", flaky)
+    (inbox / "a_bad.pdf").write_bytes(make_pdf([GOOD, ""]))
+    (inbox / "b_good.pdf").write_bytes(make_pdf([""]))
+    ingest(inbox, catalog, engine=FakeEngine([(GOOD2, 0.95)]))
+    [page] = catalog.set_aside_pages()
+    assert page.path.name == "a_bad.pdf" and page.reason is Reason.OCR_FAILED
+    assert catalog.document_for_path((inbox / "b_good.pdf").resolve()).text == GOOD2
+
+
+class BetterEngine(FakeEngine):
+    name = "fake-2"
+
+
+def test_a_new_engine_rereads_pages_an_old_engine_read(catalog, inbox):
+    (inbox / "blurry.pdf").write_bytes(make_pdf([GOOD, ""]))
+    ingest(inbox, catalog, engine=FakeEngine([(GOOD2, 0.58)]))
+    better = BetterEngine([(GOOD2, 0.95)])
+    retry(catalog, engine=better)
+    assert better.calls == 1
+    assert catalog.set_aside_pages() == []
+
+
+def test_failed_page_stores_no_confidence(catalog, inbox):
+    (inbox / "scan.pdf").write_bytes(make_pdf([GOOD, ""]))
+    ingest(inbox, catalog, engine=FakeEngine([], raise_on=1))
+    [page] = catalog.set_aside_pages()
+    assert page.reason is Reason.OCR_FAILED and page.ocr_confidence is None
