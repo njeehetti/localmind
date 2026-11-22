@@ -18,7 +18,7 @@ from localmind.folders import FolderName, parse_folder
 def _decide(catalog: Catalog, document_id: int, folder_id: int) -> None:
     """Record the user's choice for every file of the document, and place it."""
     name = catalog.folder(folder_id).name
-    doc = catalog._document_to_classify(document_id)
+    doc = catalog.document_to_classify(document_id)
     for file_hash, path in zip(doc.file_hashes, doc.paths):
         catalog.record_folder_decision(file_hash, path, name)
     previous = catalog.classification(document_id)

@@ -225,6 +225,22 @@ class FolderStore:
             paths=paths,
         )
 
+    def document_to_classify(self, document_id: int) -> DocumentToClassify:
+        return self._document_to_classify(document_id)
+
+    def unsorted_documents(self) -> list[DocumentToClassify]:
+        """Documents with an indexed file but no folder (never classified, or
+        classification failed)."""
+        ids = [
+            r[0]
+            for r in self._conn.execute(
+                """SELECT d.id FROM documents d
+                   LEFT JOIN classifications c ON c.document_id = d.id
+                   WHERE c.folder_id IS NULL ORDER BY d.id"""
+            )
+        ]
+        return [d for d in map(self._document_to_classify, ids) if d.paths]
+
     def documents_to_classify(self, under: Path | None, redo: bool) -> list[DocumentToClassify]:
         condition = "c.method IS NULL OR c.method != 'user'" if redo else "c.document_id IS NULL"
         ids = [
