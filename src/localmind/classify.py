@@ -108,7 +108,12 @@ def classify(
     run = _Run(catalog, classifier, config)
     results: list[DocClassification] = []
     unavailable: str | None = None
-    for doc in catalog.documents_to_classify(under, redo):
+    docs = catalog.documents_to_classify(under, redo)
+    try:
+        run.prepare(docs)
+    except ClassifierUnavailable as exc:
+        unavailable = exc.hint
+    for doc in docs:
         if unavailable is None:
             try:
                 result = run.one(doc)
@@ -133,6 +138,21 @@ class _Run:
         self.model = classifier.embed_model
         self.used_llm = False
         self._examples_ready = False
+        self._names: dict[str, list[float]] = {}  # folder-name vectors, this run
+
+    def prepare(self, docs: list[DocumentToClassify]) -> None:
+        """Embed everything first, in batches: Ollama then never has to switch
+        between the embedding model and the LLM for each document."""
+        self._embed_missing_examples()
+        todo = [
+            d for d in docs
+            if self.catalog.embedding(d.id, self.model) is None
+            and self.catalog.folder_decision_for(d.file_hashes, d.paths) is None
+        ]
+        if todo:
+            vectors = self.classifier.embed([self._embed_text(d) for d in todo])
+            for doc, vector in zip(todo, vectors):
+                self.catalog.store_embedding(doc.id, self.model, vector)
 
     # -- per document ----------------------------------------------------
     def one(self, doc: DocumentToClassify) -> DocClassification:
@@ -265,9 +285,11 @@ class _Run:
                 return candidate
         if not candidates:
             return word
-        vectors = self.classifier.embed([word, *candidates])
+        missing = [t for t in dict.fromkeys([word, *candidates]) if t not in self._names]
+        if missing:
+            self._names.update(zip(missing, self.classifier.embed(missing)))
         best_sim, best = max(
-            (cosine(vectors[0], v), c) for v, c in zip(vectors[1:], candidates)
+            (cosine(self._names[word], self._names[c]), c) for c in candidates
         )
         return best if best_sim >= self.config.name_merge else word
 

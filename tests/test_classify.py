@@ -171,8 +171,8 @@ def test_sensitive_values_never_reach_the_models(catalog, inbox):
 
 def test_ollama_dropping_mid_run_keeps_done_work(catalog, inbox):
     for i in range(10):
-        add(catalog, inbox, f"facture_{i:02}.txt", invoice(i))
-    fake = FakeClassifier(by_keyword, fail_embed_on="numero 4,")
+        add(catalog, inbox, f"note_{i:02}.txt", f"Note personnelle numero {i} sur le sujet {i * 7}.")
+    fake = FakeClassifier(by_keyword, fail_choose_after=4)  # unavailable on document 5
     report = classify(catalog, fake)
     assert report.unavailable and "ollama serve" in report.unavailable
     assert [r.status for r in report.results] == ["to_confirm"] * 4 + ["unsorted"] * 6
@@ -237,3 +237,14 @@ def test_import_localmind_makes_no_network_call():
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert out.returncode == 0 and out.stdout.strip() == "ok"
+
+
+def test_documents_are_embedded_in_one_batch_and_names_once(catalog, inbox):
+    for i in range(3):
+        add(catalog, inbox, f"facture_{i}.txt", invoice(i))
+    for i in range(3):
+        add(catalog, inbox, f"paie_{i}.txt", payslip(i))
+    fake = FakeClassifier(by_keyword)
+    classify(catalog, fake)
+    assert len(fake.embed_batches[0]) == 6  # every document before any LLM call
+    assert len(fake.embedded) == len(set(fake.embedded))  # no text embedded twice

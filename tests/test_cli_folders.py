@@ -250,3 +250,11 @@ def test_redirected_output_in_a_legacy_encoding_does_not_crash(tmp_path, inbox):
     )
     assert out.returncode == 0, out.stderr.decode(errors="replace")
     assert "→ Maison/Factures (your choice)" in out.stdout.decode("utf-8")
+
+
+def test_null_device_is_not_a_terminal(monkeypatch):
+    import os
+
+    with open(os.devnull) as null:
+        monkeypatch.setattr("sys.stdin", null)
+        assert cli._is_interactive() is False

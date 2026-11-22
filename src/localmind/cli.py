@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import sys
 from pathlib import Path
 from typing import get_args
@@ -64,8 +65,23 @@ def _print_report(report: IngestReport, verbose: bool) -> None:
 
 
 def _is_interactive() -> bool:
-    """Can someone answer a question? (False in scripts, pipes, JARVIS.)"""
-    return sys.stdin.isatty()
+    """Can someone answer a question? (False in scripts, pipes, JARVIS.)
+
+    On Windows the NUL device (``< NUL``, ``< /dev/null``) claims to be a
+    terminal: only a real console counts."""
+    if not sys.stdin.isatty():
+        return False
+    if os.name != "nt":
+        return True
+    import ctypes
+    import msvcrt
+
+    try:
+        handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+    except (OSError, ValueError):
+        return False
+    mode = ctypes.c_uint32()
+    return bool(ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
 
 
 def _ask(prompt: str) -> bool:

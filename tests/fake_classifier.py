@@ -21,11 +21,13 @@ class FakeClassifier:
     name = "fake-llm+fake-embed"
     embed_model = "fake-embed"
 
-    def __init__(self, answers=None, fail_embed_on=None, unavailable=False):
+    def __init__(self, answers=None, fail_embed_on=None, unavailable=False, fail_choose_after=None):
         self.answers = answers if answers is not None else []
         self.fail_embed_on = fail_embed_on  # substring that makes embed() unavailable
         self.unavailable = unavailable
+        self.fail_choose_after = fail_choose_after  # Ollama stops after n LLM answers
         self.embedded: list[str] = []
+        self.embed_batches: list[list[str]] = []
         self.chats: list[list[dict]] = []
         self.releases = 0
         self._axes: dict[str, int] = {}
@@ -48,10 +50,13 @@ class FakeClassifier:
         if self.unavailable or (self.fail_embed_on and any(self.fail_embed_on in t for t in texts)):
             raise self._unavailable()
         self.embedded.extend(texts)
+        self.embed_batches.append(list(texts))
         return [self._vector(t) for t in texts]
 
     def choose(self, messages, schema):
-        if self.unavailable:
+        if self.unavailable or (
+            self.fail_choose_after is not None and len(self.chats) >= self.fail_choose_after
+        ):
             raise self._unavailable()
         self.chats.append(messages)
         payload = json.loads(messages[-1]["content"])
