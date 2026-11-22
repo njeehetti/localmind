@@ -7,11 +7,14 @@ but every later stage depends on it. Garbage text in = garbage answers out.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from pypdf import PasswordType, PdfReader
 from pypdf.errors import PdfReadError
+
+from localmind.ocr import OcrPage
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +54,12 @@ class ExtractedText:
     """Extracted content, one string per page (a text file is a single page)."""
 
     pages: tuple[str, ...]
-    kind: str  # "text" or "pdf"
+    kind: str  # "text", "pdf" or "image"
     encoding: str | None = None
-    # 1-based numbers of PDF pages that draw a raster image (scans, photos).
+    # 1-based numbers of pages that draw a raster image (scans, photos).
     image_pages: frozenset[int] = frozenset()
+    # 1-based page -> what OCR read there (filled by ingestion, never by extract).
+    ocr: Mapping[int, OcrPage] = field(default_factory=dict)
 
     @property
     def text(self) -> str:
@@ -63,7 +68,7 @@ class ExtractedText:
 
     @property
     def page_count(self) -> int | None:
-        return len(self.pages) if self.kind == "pdf" else None
+        return len(self.pages) if self.kind in ("pdf", "image") else None
 
 
 def extract(path: Path) -> ExtractedText:

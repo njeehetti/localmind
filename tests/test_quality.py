@@ -1,5 +1,15 @@
+from dataclasses import replace
+
 from localmind.extractors import ExtractedText
-from localmind.quality import QualityConfig, Reason, assess, is_garbled, is_machine_log
+from localmind.ocr import OcrPage
+from localmind.quality import (
+    QualityConfig,
+    Reason,
+    assess,
+    is_garbled,
+    is_machine_log,
+    needs_ocr_pages,
+)
 
 
 def pdf(*pages):
@@ -103,3 +113,71 @@ def test_sensitive_quarantine_policy_and_accept_override():
 def test_set_aside_pages_are_not_scanned_for_sensitive_data():
     a = assess(pdf(GOOD, "\x01" * 30 + IBAN), QualityConfig())
     assert a.pages[1].reason is Reason.GARBLED and a.pages[1].spans == ()
+
+
+# --- stage 2b: OCR page rules ---------------------------------------------
+
+SCAN = ExtractedText(pages=("",), kind="pdf", image_pages=frozenset({1}))
+
+
+def test_ocr_text_replaces_needs_ocr_page():
+    a = assess(replace(SCAN, ocr={1: OcrPage(GOOD, 0.95, "fake")}), QualityConfig())
+    assert a.quarantine_reason is None
+    assert a.pages[0].source == "ocr" and a.pages[0].ocr_confidence == 0.95
+    assert a.pages[0].ocr_engine == "fake"
+    assert a.usable_text == GOOD
+
+
+def test_ocr_low_confidence_page_is_set_aside():
+    a = assess(replace(SCAN, ocr={1: OcrPage(GOOD, 0.58, "fake")}), QualityConfig())
+    assert a.quarantine_reason is Reason.OCR_LOW_CONFIDENCE
+
+
+def test_ocr_failure_page_is_set_aside():
+    a = assess(replace(SCAN, ocr={1: OcrPage("", -1.0, "fake")}), QualityConfig())
+    assert a.quarantine_reason is Reason.OCR_FAILED
+
+
+def test_ocr_short_text_is_blank_and_does_not_make_partial():
+    doc = ExtractedText(
+        pages=(GOOD, ""), kind="pdf", image_pages=frozenset({2}),
+        ocr={2: OcrPage("3", 0.99, "fake")},
+    )
+    a = assess(doc, QualityConfig())
+    assert a.pages[1].is_blank and not a.has_set_aside and a.quarantine_reason is None
+    assert a.usable_text == GOOD
+
+
+def test_all_blank_pages_quarantine_as_ocr_no_text():
+    a = assess(replace(SCAN, ocr={1: OcrPage("", 0.0, "fake")}), QualityConfig())
+    assert a.quarantine_reason is Reason.OCR_NO_TEXT
+
+
+def test_blank_and_low_confidence_quarantine_with_the_real_problem():
+    doc = ExtractedText(
+        pages=("", "", ""), kind="pdf", image_pages=frozenset({1, 2, 3}),
+        ocr={1: OcrPage("", 0.0, "f"), 2: OcrPage("", 0.0, "f"), 3: OcrPage(GOOD, 0.4, "f")},
+    )
+    assert assess(doc, QualityConfig()).quarantine_reason is Reason.OCR_LOW_CONFIDENCE
+
+
+def test_sensitive_data_found_in_ocr_text():
+    rib = GOOD + IBAN
+    a = assess(replace(SCAN, ocr={1: OcrPage(rib, 0.9, "fake")}), QualityConfig())
+    assert [s.kind for s in a.pages[0].spans] == ["iban"]
+
+
+def test_image_kind_without_ocr_needs_ocr():
+    img = ExtractedText(pages=("",), kind="image", image_pages=frozenset({1}))
+    assert assess(img, QualityConfig()).quarantine_reason is Reason.NEEDS_OCR
+
+
+def test_needs_ocr_pages_lists_scanned_pages_only():
+    doc = ExtractedText(
+        pages=(GOOD * 5, "Scanned with CamScanner"), kind="pdf", image_pages=frozenset({2})
+    )
+    assert needs_ocr_pages(doc, QualityConfig()) == frozenset({2})
+
+
+def test_text_files_never_need_ocr():
+    assert needs_ocr_pages(txt(""), QualityConfig()) == frozenset()
