@@ -303,10 +303,15 @@ def _process(
 
     # Dedup key: the usable text. A document with set-aside pages also carries
     # its file hash, otherwise two PDFs sharing a cover page but with different
-    # scanned pages would be merged and the second one's pages lost.
+    # scanned pages would be merged and the second one's pages lost. It also
+    # carries the set-aside verdicts, so a page moving from "needs_ocr" to
+    # "ocr_low_confidence" stores a new version instead of keeping the old one.
     key = content_hash(assessment.usable_text)
     if assessment.has_set_aside:
-        key = f"{key}:{file_hash}"
+        verdicts = ",".join(
+            f"{p.page_no}={p.reason}" for p in assessment.pages if p.reason and not p.is_blank
+        )
+        key = f"{key}:{file_hash}:{content_hash(verdicts)[:12]}"
 
     existing = catalog.document_id_by_content_key(key)
     if existing is not None:

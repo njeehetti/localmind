@@ -119,6 +119,17 @@ def test_low_confidence_page_is_set_aside(catalog, inbox):
     assert page.reason is Reason.OCR_LOW_CONFIDENCE and page.ocr_confidence == 0.58
 
 
+def test_new_set_aside_reason_replaces_the_old_one(catalog, inbox):
+    # Same usable text before and after OCR (page 2 still set aside), but the
+    # reason changed: the stored pages must follow.
+    (inbox / "blurry.pdf").write_bytes(make_pdf([GOOD, ""]))
+    ingest(inbox, catalog)
+    run_ocr(catalog, FakeEngine([(GOOD2, 0.58)]))
+    [page] = catalog.set_aside_pages()
+    assert page.reason is Reason.OCR_LOW_CONFIDENCE
+    assert catalog.stats().documents == 1
+
+
 def test_engine_failure_sets_page_aside_and_continues(catalog, inbox):
     (inbox / "a.pdf").write_bytes(make_pdf([""]))
     (inbox / "b.pdf").write_bytes(make_pdf(["", ""]))  # different bytes: not a copy of a.pdf
