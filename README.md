@@ -14,7 +14,8 @@ on your machine: no cloud, no API key, your files never leave your disk.
 | # | Stage | What you learn | Status |
 |---|-------|----------------|--------|
 | 1 | [Ingestion](docs/01-ingestion.md) | Text extraction, encodings, PDF internals, content hashing, deduplication | ✅ |
-| 2 | Filtering & quarantine | Detecting empty, scanned or unreadable files | ⏳ |
+| 2a | [Filtering & quarantine](docs/02-quality-filtering.md) | Page-level quality rules, thresholds, checksums (Luhn, mod 97), user decisions | ✅ |
+| 2b | OCR | Neural OCR (docTR) for scans and images | ⏳ |
 | 3 | Classification | Zero-shot sorting into folders with a local LLM | ⏳ |
 | 4 | Chunking & embeddings | Turning text into vectors | ⏳ |
 | 5 | Retrieval | Vector search, BM25, hybrid search | ⏳ |
@@ -28,6 +29,8 @@ uv sync
 uv run localmind ingest ~/Documents/inbox   # read + deduplicate
 uv run localmind stats
 uv run localmind duplicates
+uv run localmind quarantine                 # what was set aside, and why
+uv run localmind quarantine accept FILE     # keep it anyway
 ```
 
 The catalog lives in `~/.localmind/catalog.db` (override with `--db` or `LOCALMIND_DB`).

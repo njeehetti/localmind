@@ -20,9 +20,15 @@ def _content_stream(text: str) -> bytes:
     return "\n".join(ops).encode("latin-1")
 
 
-def make_pdf(pages: list[str]) -> bytes:
-    """Return the bytes of a PDF with one page per string (empty string = no text)."""
+def make_pdf(pages: list[str], image_pages: set[int] = frozenset()) -> bytes:
+    """Return the bytes of a PDF with one page per string (empty string = no text).
+
+    ``image_pages`` (1-based) also draw a picture on those pages, like a scanner
+    does: the page is an image, sometimes with a small text layer on top
+    ("Scanned with ...").
+    """
     page_ids = [4 + 2 * i for i in range(len(pages))]
+    image_id = 4 + 2 * len(pages)
     kids = " ".join(f"{pid} 0 R" for pid in page_ids)
 
     objects: dict[int, bytes] = {
@@ -30,13 +36,23 @@ def make_pdf(pages: list[str]) -> bytes:
         2: f"<< /Type /Pages /Kids [{kids}] /Count {len(pages)} >>".encode(),
         3: b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
     }
-    for pid, text in zip(page_ids, pages):
+    if image_pages:
+        # A 1x1 grey pixel: the smallest possible raster image.
+        objects[image_id] = (
+            b"<< /Type /XObject /Subtype /Image /Width 1 /Height 1 "
+            b"/ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\x80\nendstream"
+        )
+    for page_no, (pid, text) in enumerate(zip(page_ids, pages), start=1):
         cid = pid + 1
+        has_image = page_no in image_pages
+        xobject = f" /XObject << /Im1 {image_id} 0 R >>" if has_image else ""
         objects[pid] = (
             f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
-            f"/Resources << /Font << /F1 3 0 R >> >> /Contents {cid} 0 R >>"
+            f"/Resources << /Font << /F1 3 0 R >>{xobject} >> /Contents {cid} 0 R >>"
         ).encode()
         stream = _content_stream(text)
+        if has_image:
+            stream = b"q 500 0 0 700 50 50 cm /Im1 Do Q\n" + stream
         objects[cid] = (
             b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream"
         )

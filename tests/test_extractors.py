@@ -1,6 +1,6 @@
 import pytest
 
-from localmind.extractors import ExtractionError, UnsupportedFormat, extract
+from localmind.extractors import EncryptedPdf, ExtractionError, UnsupportedFormat, extract
 from tests.pdf_factory import make_pdf
 
 
@@ -71,3 +71,54 @@ def test_unsupported_extension(tmp_path):
     f.write_bytes(b"\xff\xd8\xff")
     with pytest.raises(UnsupportedFormat):
         extract(f)
+
+
+def test_text_file_is_one_page(tmp_path):
+    f = tmp_path / "a.txt"
+    f.write_text("x y z", encoding="utf-8")
+    assert extract(f).pages == ("x y z",)
+
+
+def test_pdf_pages_are_separate(tmp_path):
+    f = tmp_path / "d.pdf"
+    f.write_bytes(make_pdf(["One", "Two"]))
+    r = extract(f)
+    assert len(r.pages) == 2 and "One" in r.pages[0] and "Two" in r.pages[1]
+
+
+def test_pdf_pages_with_images_are_reported(tmp_path):
+    f = tmp_path / "scan.pdf"
+    f.write_bytes(make_pdf(["Scanned with CamScanner", "Plain text page here"], image_pages={1}))
+    assert extract(f).image_pages == frozenset({1})
+
+
+def test_text_file_has_no_image_pages(tmp_path):
+    f = tmp_path / "a.txt"
+    f.write_text("x y z", encoding="utf-8")
+    assert extract(f).image_pages == frozenset()
+
+
+def test_encrypted_pdf_raises_encrypted(tmp_path):
+    from pypdf import PdfWriter
+
+    w = PdfWriter()
+    w.add_blank_page(100, 100)
+    w.encrypt(user_password="secret", algorithm="AES-256")
+    f = tmp_path / "locked.pdf"
+    with f.open("wb") as s:
+        w.write(s)
+    with pytest.raises(EncryptedPdf):
+        extract(f)
+
+
+def test_pdf_encrypted_with_empty_password_is_readable(tmp_path):
+    from pypdf import PdfReader, PdfWriter
+
+    src = tmp_path / "src.pdf"
+    src.write_bytes(make_pdf(["Hello world text"]))
+    w = PdfWriter(clone_from=PdfReader(src))
+    w.encrypt(user_password="", owner_password="o", algorithm="AES-256")
+    f = tmp_path / "open.pdf"
+    with f.open("wb") as s:
+        w.write(s)
+    assert "Hello world text" in extract(f).text

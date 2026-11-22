@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from pypdf import PdfReader
+from pypdf import PasswordType, PdfReader
 from pypdf.errors import PdfReadError
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 TEXT_SUFFIXES = frozenset({".txt", ".md"})
 PDF_SUFFIXES = frozenset({".pdf"})
 SUPPORTED_SUFFIXES = TEXT_SUFFIXES | PDF_SUFFIXES
+# Images are not readable yet, but they are not "junk" either: stage 2b (OCR)
+# will read them, so ingestion sets them aside as "needs OCR".
+IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"})
 
 # Order matters. UTF-8 is strict: random bytes almost never form valid UTF-8,
 # so if decoding succeeds it is very likely right. cp1252 (old Windows default)
@@ -39,12 +42,28 @@ class ExtractionError(Exception):
     """The file type is supported but this file could not be read."""
 
 
+class EncryptedPdf(ExtractionError):
+    """The PDF is password-protected and the empty password does not open it."""
+
+
 @dataclass(frozen=True)
 class ExtractedText:
-    text: str
+    """Extracted content, one string per page (a text file is a single page)."""
+
+    pages: tuple[str, ...]
     kind: str  # "text" or "pdf"
-    page_count: int | None = None
     encoding: str | None = None
+    # 1-based numbers of PDF pages that draw a raster image (scans, photos).
+    image_pages: frozenset[int] = frozenset()
+
+    @property
+    def text(self) -> str:
+        # Form feed = page break: later stages can still cite page numbers.
+        return "\f".join(self.pages)
+
+    @property
+    def page_count(self) -> int | None:
+        return len(self.pages) if self.kind == "pdf" else None
 
 
 def extract(path: Path) -> ExtractedText:
@@ -77,14 +96,38 @@ def _extract_text_file(path: Path) -> ExtractedText:
     text, encoding = _decode(raw)
     # Normalise the reported name: "utf-8-sig" is still UTF-8 for the user.
     reported = "utf-8" if encoding == "utf-8-sig" else encoding
-    return ExtractedText(text=text, kind="text", encoding=reported)
+    return ExtractedText(pages=(text,), kind="text", encoding=reported)
 
 
 def _extract_pdf(path: Path) -> ExtractedText:
     try:
         reader = PdfReader(path)
-        pages = [page.extract_text() or "" for page in reader.pages]
+        # Many PDFs are "encrypted" only to restrict printing/copying: they
+        # open with an empty user password. Only a real password stops us.
+        if reader.is_encrypted and reader.decrypt("") == PasswordType.NOT_DECRYPTED:
+            raise EncryptedPdf("PDF is password-protected")
+        pages = tuple(page.extract_text() or "" for page in reader.pages)
+        image_pages = frozenset(
+            n for n, page in enumerate(reader.pages, start=1) if _has_image(page)
+        )
+    except EncryptedPdf:
+        raise
     except (PdfReadError, OSError, ValueError, KeyError) as exc:
         raise ExtractionError(f"cannot parse PDF: {exc}") from exc
-    # Page breaks are kept as form feeds: later stages can cite page numbers.
-    return ExtractedText(text="\f".join(pages), kind="pdf", page_count=len(pages))
+    return ExtractedText(pages=pages, kind="pdf", image_pages=image_pages)
+
+
+def _has_image(page) -> bool:
+    """True if the page's resources hold an image XObject.
+
+    A scanner app often adds a tiny text layer ("Scanned with ...") on top of
+    the picture: counting characters alone would mistake the scan for text.
+    """
+    resources = page.get("/Resources")
+    if resources is None:
+        return False
+    xobjects = resources.get_object().get("/XObject")
+    if xobjects is None:
+        return False
+    xobjects = xobjects.get_object()
+    return any(xobjects[name].get_object().get("/Subtype") == "/Image" for name in xobjects)

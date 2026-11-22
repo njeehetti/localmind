@@ -9,9 +9,23 @@ assistant only use these names):
     ...     report = ingest(Path("~/Documents/inbox").expanduser(), catalog)
 """
 
-from localmind.catalog import Catalog
-from localmind.config import default_db_path
-from localmind.ingest import IngestReport, Outcome, ingest
+from localmind.catalog import Catalog, Decision, FileStatus
+from localmind.config import default_db_path, sensitive_policy_from_env
+from localmind.ingest import IngestReport, Outcome, apply_decision, ingest, retry
+from localmind.quality import QualityConfig, Reason
 
-__all__ = ["Catalog", "IngestReport", "Outcome", "default_db_path", "ingest"]
-__version__ = "0.1.0"
+__all__ = [
+    "Catalog",
+    "Decision",
+    "FileStatus",
+    "IngestReport",
+    "Outcome",
+    "QualityConfig",
+    "Reason",
+    "apply_decision",
+    "default_db_path",
+    "ingest",
+    "retry",
+    "sensitive_policy_from_env",
+]
+__version__ = "0.2.0"
