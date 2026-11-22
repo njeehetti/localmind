@@ -11,7 +11,8 @@ assistant only use these names):
 
 from localmind.catalog import Catalog, Decision, FileStatus
 from localmind.config import default_db_path, sensitive_policy_from_env
-from localmind.ingest import IngestReport, Outcome, apply_decision, ingest, retry
+from localmind.ingest import IngestReport, Outcome, apply_decision, ingest, retry, run_ocr
+from localmind.ocr import OcrEngine, OcrPage, load_engine, ocr_available
 from localmind.quality import QualityConfig, Reason
 
 __all__ = [
@@ -19,13 +20,18 @@ __all__ = [
     "Decision",
     "FileStatus",
     "IngestReport",
+    "OcrEngine",
+    "OcrPage",
     "Outcome",
     "QualityConfig",
     "Reason",
     "apply_decision",
     "default_db_path",
     "ingest",
+    "load_engine",
+    "ocr_available",
     "retry",
+    "run_ocr",
     "sensitive_policy_from_env",
 ]
 __version__ = "0.2.0"

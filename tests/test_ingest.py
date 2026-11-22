@@ -1,4 +1,5 @@
 import pytest
+from PIL import Image
 
 from localmind.catalog import Catalog
 from localmind.ingest import Outcome, ingest
@@ -97,7 +98,7 @@ def test_modified_file_is_updated_and_old_content_dropped(catalog, inbox):
 
 
 def test_unreadable_files_are_quarantined_with_reason(catalog, inbox):
-    (inbox / "photo.jpg").write_bytes(b"\xff\xd8\xff")
+    Image.new("RGB", (40, 20), "white").save(inbox / "photo.jpg")
     (inbox / "broken.pdf").write_bytes(b"not a pdf")
     (inbox / "archive.zip").write_bytes(b"PK\x03\x04")
     (inbox / "zero.txt").write_bytes(b"")
@@ -190,8 +191,8 @@ def test_same_good_page_different_scans_not_merged(catalog, inbox):
 
 
 def test_copy_of_quarantined_file_is_quarantined_too(catalog, inbox):
-    (inbox / "x.jpg").write_bytes(b"\xff\xd8\xff")
-    (inbox / "x (1).jpg").write_bytes(b"\xff\xd8\xff")
+    Image.new("RGB", (40, 20), "white").save(inbox / "x.jpg")
+    (inbox / "x (1).jpg").write_bytes((inbox / "x.jpg").read_bytes())
 
     ingest(inbox, catalog)
 
