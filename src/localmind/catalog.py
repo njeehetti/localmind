@@ -1,21 +1,26 @@
-"""The catalog: a SQLite database of *pointers* to your files (schema v2).
+"""The catalog: a SQLite database of *pointers* to your files (schema v3).
 
     files                       documents                 pages
     -------------------------   -----------------------   -------------------------
     path (unique)               content_key (unique)      document_id, page_no
     file_hash  (bytes)          kind, page_count          text
-    status: indexed |           <-- document_id           status: ok | set_aside
-      quarantined | ignored                               reason
+    status: indexed |           <-- document_id           status: ok | set_aside | blank
+      quarantined | ignored                               reason, source (text_layer | ocr)
+    page_count                                            ocr_engine, ocr_confidence
     reason                                                --> sensitive_spans
     document_id (NULL unless indexed) ----------------->      (kind, start, end)
 
     decisions: file_hash -> accept | ignore   (keyed by content: survives moves)
+    ocr_cache: (file_hash, page_no, engine) -> text, confidence
+               (OCR is slow: never read the same page twice, even for a copy)
 
 * A **document** is a piece of information; a **file** is where it lives.
   Many files can point to one document: that is duplicate detection.
 * A quarantined file has no document: text-less files are never "duplicates"
   of each other just because their (empty) text is identical.
 * Original files are never moved, copied or modified; only their path is stored.
+* Migrations never touch ``decisions`` or ``ocr_cache``: they hold the user's
+  choices and hours of OCR work, which a new ``ingest`` cannot recreate.
 """
 
 from __future__ import annotations
@@ -29,9 +34,23 @@ from pathlib import Path
 from types import TracebackType
 from typing import Literal
 
+from localmind.ocr import OcrPage
 from localmind.quality import PageVerdict, Reason
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+
+_PAGES_COLUMNS = """
+    id              INTEGER PRIMARY KEY,
+    document_id     INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    page_no         INTEGER NOT NULL,
+    text            TEXT NOT NULL,
+    status          TEXT NOT NULL CHECK (status IN ('ok', 'set_aside', 'blank')),
+    reason          TEXT,
+    source          TEXT NOT NULL DEFAULT 'text_layer' CHECK (source IN ('text_layer', 'ocr')),
+    ocr_engine      TEXT,
+    ocr_confidence  REAL,
+    UNIQUE (document_id, page_no)
+"""
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS documents (
@@ -41,15 +60,7 @@ CREATE TABLE IF NOT EXISTS documents (
     page_count   INTEGER,
     created_at   TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS pages (
-    id           INTEGER PRIMARY KEY,
-    document_id  INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-    page_no      INTEGER NOT NULL,
-    text         TEXT NOT NULL,
-    status       TEXT NOT NULL CHECK (status IN ('ok', 'set_aside')),
-    reason       TEXT,
-    UNIQUE (document_id, page_no)
-);
+CREATE TABLE IF NOT EXISTS pages ({pages_columns});
 CREATE TABLE IF NOT EXISTS sensitive_spans (
     id       INTEGER PRIMARY KEY,
     page_id  INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
@@ -66,19 +77,41 @@ CREATE TABLE IF NOT EXISTS files (
     status       TEXT NOT NULL CHECK (status IN ('indexed', 'quarantined', 'ignored')),
     reason       TEXT,
     document_id  INTEGER REFERENCES documents(id),
-    ingested_at  TEXT NOT NULL
+    ingested_at  TEXT NOT NULL,
+    page_count   INTEGER
 );
 CREATE TABLE IF NOT EXISTS decisions (
     file_hash   TEXT PRIMARY KEY,
     decision    TEXT NOT NULL CHECK (decision IN ('accept', 'ignore')),
     decided_at  TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS ocr_cache (
+    file_hash   TEXT NOT NULL,
+    page_no     INTEGER NOT NULL,
+    engine      TEXT NOT NULL,
+    text        TEXT NOT NULL,
+    confidence  REAL NOT NULL,
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (file_hash, page_no, engine)
+);
 CREATE INDEX IF NOT EXISTS idx_files_file_hash ON files(file_hash);
 CREATE INDEX IF NOT EXISTS idx_files_document ON files(document_id);
 CREATE INDEX IF NOT EXISTS idx_pages_document ON pages(document_id);
-"""
+""".replace("{pages_columns}", _PAGES_COLUMNS)
 
-_ALL_TABLES = ("sensitive_spans", "pages", "files", "documents", "decisions")
+# Tables a v1 catalog rebuild may drop. Never "decisions" nor "ocr_cache".
+_REBUILT_TABLES = ("sensitive_spans", "pages", "files", "documents")
+
+# v2 -> v3 in place. SQLite cannot change a CHECK constraint with ALTER TABLE,
+# so "pages" is copied into a new table with the new definition, then renamed.
+_V2_TO_V3 = """
+CREATE TABLE pages_new ({pages_columns});
+INSERT INTO pages_new (id, document_id, page_no, text, status, reason)
+    SELECT id, document_id, page_no, text, status, reason FROM pages;
+DROP TABLE pages;
+ALTER TABLE pages_new RENAME TO pages;
+ALTER TABLE files ADD COLUMN page_count INTEGER;
+""".replace("{pages_columns}", _PAGES_COLUMNS)
 
 
 class FileStatus(StrEnum):
@@ -117,6 +150,15 @@ class SetAsidePage:
     path: Path
     page_no: int
     reason: Reason
+    ocr_confidence: float | None = None
+
+
+@dataclass(frozen=True)
+class PendingOcr:
+    """Pages OCR could read: set aside "needs_ocr" or in quarantined scans."""
+
+    pages: int
+    files: int
 
 
 @dataclass(frozen=True)
@@ -136,6 +178,8 @@ class Stats:
     quarantined: int
     ignored: int
     sensitive_flags: int
+    ocr_pages: int = 0
+    blank_pages: int = 0
 
 
 @dataclass(frozen=True)
@@ -155,6 +199,10 @@ def _reason(value: str | None) -> Reason | None:
 _FILE_COLUMNS = "path, file_hash, size_bytes, status, reason, document_id"
 
 
+def _is_under(path: Path, under: Path | None) -> bool:
+    return under is None or path == under or path.is_relative_to(under)
+
+
 def _file_record(row: tuple) -> FileRecord:
     path, file_hash, size, status, reason, document_id = row
     return FileRecord(Path(path), file_hash, size, FileStatus(status), _reason(reason), document_id)
@@ -171,17 +219,33 @@ class Catalog:
         self._conn.commit()
 
     def _migrate(self) -> bool:
-        """A v1 catalog (stage 1) is a rebuildable index: drop it and start over.
-        Originals are untouched and v1 had no user decisions, so nothing is lost
-        that a new `ingest` cannot recreate."""
+        """Bring an older catalog to the current schema. Returns True if it was
+        a v1 catalog that had to be rebuilt.
+
+        * v1 (stage 1) is a rebuildable index: its tables are dropped and a new
+          ``ingest`` recreates them (originals are untouched). ``decisions`` and
+          ``ocr_cache`` are never dropped.
+        * v2 (stage 2a) is upgraded in place: nothing is lost.
+        """
         version = self._conn.execute("PRAGMA user_version").fetchone()[0]
         has_tables = self._conn.execute(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'documents'"
         ).fetchone()[0]
         if version >= SCHEMA_VERSION or not has_tables:
             return False
+        if version == 2:
+            self._conn.commit()
+            self._conn.execute("PRAGMA foreign_keys = OFF")  # no effect inside a transaction
+            try:
+                self._conn.executescript("BEGIN;" + _V2_TO_V3 + "COMMIT;")
+            except sqlite3.Error:
+                self._conn.rollback()
+                raise
+            finally:
+                self._conn.execute("PRAGMA foreign_keys = ON")
+            return False
         with self._conn:
-            for table in _ALL_TABLES:
+            for table in _REBUILT_TABLES:
                 self._conn.execute(f"DROP TABLE IF EXISTS {table}")
         return True
 
@@ -257,12 +321,12 @@ class Catalog:
 
     def set_aside_pages(self) -> list[SetAsidePage]:
         rows = self._conn.execute(
-            """SELECT f.path, p.page_no, p.reason FROM pages p
+            """SELECT f.path, p.page_no, p.reason, p.ocr_confidence FROM pages p
                JOIN files f ON f.document_id = p.document_id
                WHERE p.status = 'set_aside' AND f.status = 'indexed'
                ORDER BY f.path, p.page_no"""
         ).fetchall()
-        return [SetAsidePage(Path(path), n, Reason(r)) for path, n, r in rows]
+        return [SetAsidePage(Path(path), n, Reason(r), conf) for path, n, r, conf in rows]
 
     def sensitive_flags(self) -> list[SensitiveFlag]:
         rows = self._conn.execute(
@@ -282,10 +346,46 @@ class Catalog:
                         SELECT document_id FROM pages WHERE status = 'set_aside'))
                 ORDER BY path"""
         ).fetchall()
-        records = [_file_record(r) for r in rows]
-        if under is None:
-            return records
-        return [r for r in records if r.path == under or r.path.is_relative_to(under)]
+        return [r for r in map(_file_record, rows) if _is_under(r.path, under)]
+
+    def ocr_candidates(self, under: Path | None = None) -> list[FileRecord]:
+        """Files with pages OCR could read: quarantined "needs_ocr" files and
+        indexed files whose document has pages set aside as "needs_ocr"."""
+        rows = self._conn.execute(
+            f"""SELECT {_FILE_COLUMNS} FROM files
+                WHERE (status = 'quarantined' AND reason = ?)
+                   OR (status = 'indexed' AND document_id IN (
+                        SELECT document_id FROM pages
+                        WHERE status = 'set_aside' AND reason = ?))
+                ORDER BY path""",
+            (Reason.NEEDS_OCR, Reason.NEEDS_OCR),
+        ).fetchall()
+        return [r for r in map(_file_record, rows) if _is_under(r.path, under)]
+
+    def ocr_pending(self, under: Path | None = None) -> PendingOcr:
+        """How many pages OCR could read (a stage 2a quarantined file has no
+        stored page count: it counts as one page)."""
+        rows = self._conn.execute(
+            """SELECT path, COALESCE(page_count, 1) FROM files
+                   WHERE status = 'quarantined' AND reason = ?
+               UNION ALL
+               SELECT f.path, COUNT(*) FROM pages p
+                   JOIN files f ON f.document_id = p.document_id
+                   WHERE f.status = 'indexed' AND p.status = 'set_aside' AND p.reason = ?
+                   GROUP BY f.path""",
+            (Reason.NEEDS_OCR, Reason.NEEDS_OCR),
+        ).fetchall()
+        counts = [n for path, n in rows if _is_under(Path(path), under)]
+        return PendingOcr(pages=sum(counts), files=len(counts))
+
+    def ocr_cached(self, file_hash: str, page_no: int) -> OcrPage | None:
+        row = self._conn.execute(
+            """SELECT text, confidence, engine FROM ocr_cache
+               WHERE file_hash = ? AND page_no = ?
+               ORDER BY created_at DESC, rowid DESC LIMIT 1""",
+            (file_hash, page_no),
+        ).fetchone()
+        return OcrPage(*row) if row else None
 
     # -- writes ----------------------------------------------------------
     def add_document(
@@ -298,11 +398,18 @@ class Catalog:
             )
             document_id = int(cursor.lastrowid)
             for page in pages:
-                status = "ok" if page.reason is None else "set_aside"
+                if page.reason is None:
+                    status = "ok"
+                elif page.is_blank:
+                    status = "blank"
+                else:
+                    status = "set_aside"
                 page_id = self._conn.execute(
-                    """INSERT INTO pages (document_id, page_no, text, status, reason)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (document_id, page.page_no, page.text, status, page.reason),
+                    """INSERT INTO pages (document_id, page_no, text, status, reason,
+                                          source, ocr_engine, ocr_confidence)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (document_id, page.page_no, page.text, status, page.reason,
+                     page.source, page.ocr_engine, page.ocr_confidence),
                 ).lastrowid
                 self._conn.executemany(
                     'INSERT INTO sensitive_spans (page_id, kind, start, "end") VALUES (?, ?, ?, ?)',
@@ -319,12 +426,14 @@ class Catalog:
         reason: Reason | None,
         document_id: int | None,
         encoding: str | None,
+        page_count: int | None = None,
     ) -> None:
         with self._conn:
             self._conn.execute(
                 """INSERT INTO files
-                   (path, file_hash, size_bytes, encoding, status, reason, document_id, ingested_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   (path, file_hash, size_bytes, encoding, status, reason, document_id,
+                    ingested_at, page_count)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(path) DO UPDATE SET
                        file_hash = excluded.file_hash,
                        size_bytes = excluded.size_bytes,
@@ -332,8 +441,10 @@ class Catalog:
                        status = excluded.status,
                        reason = excluded.reason,
                        document_id = excluded.document_id,
-                       ingested_at = excluded.ingested_at""",
-                (str(path), file_hash, size_bytes, encoding, status, reason, document_id, _now()),
+                       ingested_at = excluded.ingested_at,
+                       page_count = excluded.page_count""",
+                (str(path), file_hash, size_bytes, encoding, status, reason, document_id,
+                 _now(), page_count),
             )
             # A document nobody points to anymore is garbage. Its pages and
             # sensitive spans go with it (ON DELETE CASCADE).
@@ -352,11 +463,32 @@ class Catalog:
     ) -> None:
         self._upsert_file(path, file_hash, size_bytes, FileStatus.INDEXED, None, document_id, encoding)
 
-    def record_quarantine(self, path: Path, file_hash: str, size_bytes: int, reason: Reason) -> None:
-        self._upsert_file(path, file_hash, size_bytes, FileStatus.QUARANTINED, reason, None, None)
+    def record_quarantine(
+        self,
+        path: Path,
+        file_hash: str,
+        size_bytes: int,
+        reason: Reason,
+        page_count: int | None = None,
+    ) -> None:
+        self._upsert_file(
+            path, file_hash, size_bytes, FileStatus.QUARANTINED, reason, None, None, page_count
+        )
 
     def record_ignored(self, path: Path, file_hash: str, size_bytes: int) -> None:
         self._upsert_file(path, file_hash, size_bytes, FileStatus.IGNORED, None, None, None)
+
+    def store_ocr(self, file_hash: str, page_no: int, page: OcrPage) -> None:
+        """Save one OCR-ed page right away: an interrupted run keeps its work."""
+        with self._conn:
+            self._conn.execute(
+                """INSERT INTO ocr_cache (file_hash, page_no, engine, text, confidence, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(file_hash, page_no, engine) DO UPDATE SET
+                       text = excluded.text, confidence = excluded.confidence,
+                       created_at = excluded.created_at""",
+                (file_hash, page_no, page.engine, page.text, page.confidence, _now()),
+            )
 
     def record_decision(self, file_hash: str, decision: Decision) -> None:
         with self._conn:
@@ -384,6 +516,8 @@ class Catalog:
             quarantined=count("SELECT COUNT(*) FROM files WHERE status = 'quarantined'"),
             ignored=count("SELECT COUNT(*) FROM files WHERE status = 'ignored'"),
             sensitive_flags=len(self.sensitive_flags()),
+            ocr_pages=count("SELECT COUNT(*) FROM pages WHERE source = 'ocr' AND status = 'ok'"),
+            blank_pages=count("SELECT COUNT(*) FROM pages WHERE status = 'blank'"),
         )
 
     def duplicate_groups(self) -> list[DuplicateGroup]:
