@@ -3,6 +3,8 @@ name = "localmind"
 version = "0.1.0"
 description = "A fully local RAG that sorts your documents and answers questions about them, built step by step for learning."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "pypdf>=5.0",

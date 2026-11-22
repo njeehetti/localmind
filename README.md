@@ -49,3 +49,7 @@ with Catalog(default_db_path()) as catalog:
 ```bash
 uv run pytest --cov=localmind
 ```
+
+## License
+
+[MIT](LICENSE)
