@@ -1,0 +1,90 @@
+"""Turn a file on disk into plain text.
+
+This is the "plumbing" stage of a RAG: no understanding of meaning yet,
+but every later stage depends on it. Garbage text in = garbage answers out.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
+
+logger = logging.getLogger(__name__)
+
+TEXT_SUFFIXES = frozenset({".txt", ".md"})
+PDF_SUFFIXES = frozenset({".pdf"})
+SUPPORTED_SUFFIXES = TEXT_SUFFIXES | PDF_SUFFIXES
+
+# Order matters. UTF-8 is strict: random bytes almost never form valid UTF-8,
+# so if decoding succeeds it is very likely right. cp1252 (old Windows default)
+# accepts nearly any byte, so it must come after. latin-1 accepts *every* byte
+# and is the last-resort fallback that never fails.
+_FALLBACK_ENCODINGS = ("utf-8", "cp1252", "latin-1")
+_BOMS = {
+    b"\xef\xbb\xbf": "utf-8-sig",
+    b"\xff\xfe": "utf-16",
+    b"\xfe\xff": "utf-16",
+}
+
+
+class UnsupportedFormat(Exception):
+    """The file type is not handled (yet)."""
+
+
+class ExtractionError(Exception):
+    """The file type is supported but this file could not be read."""
+
+
+@dataclass(frozen=True)
+class ExtractedText:
+    text: str
+    kind: str  # "text" or "pdf"
+    page_count: int | None = None
+    encoding: str | None = None
+
+
+def extract(path: Path) -> ExtractedText:
+    suffix = path.suffix.lower()
+    if suffix in TEXT_SUFFIXES:
+        return _extract_text_file(path)
+    if suffix in PDF_SUFFIXES:
+        return _extract_pdf(path)
+    raise UnsupportedFormat(f"unsupported file type: {suffix or '(none)'}")
+
+
+def _decode(raw: bytes) -> tuple[str, str]:
+    """Guess the encoding of a text file and decode it."""
+    for bom, encoding in _BOMS.items():
+        if raw.startswith(bom):
+            return raw.decode(encoding), encoding
+    for encoding in _FALLBACK_ENCODINGS:
+        try:
+            return raw.decode(encoding), encoding
+        except UnicodeDecodeError:
+            continue
+    raise AssertionError("unreachable: latin-1 decodes any byte sequence")
+
+
+def _extract_text_file(path: Path) -> ExtractedText:
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise ExtractionError(f"cannot read file: {exc}") from exc
+    text, encoding = _decode(raw)
+    # Normalise the reported name: "utf-8-sig" is still UTF-8 for the user.
+    reported = "utf-8" if encoding == "utf-8-sig" else encoding
+    return ExtractedText(text=text, kind="text", encoding=reported)
+
+
+def _extract_pdf(path: Path) -> ExtractedText:
+    try:
+        reader = PdfReader(path)
+        pages = [page.extract_text() or "" for page in reader.pages]
+    except (PdfReadError, OSError, ValueError, KeyError) as exc:
+        raise ExtractionError(f"cannot parse PDF: {exc}") from exc
+    # Page breaks are kept as form feeds: later stages can cite page numbers.
+    return ExtractedText(text="\f".join(pages), kind="pdf", page_count=len(pages))

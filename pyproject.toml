@@ -1,0 +1,26 @@
+[project]
+name = "localmind"
+version = "0.1.0"
+description = "A fully local RAG that sorts your documents and answers questions about them, built step by step for learning."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pypdf>=5.0",
+]
+
+[project.scripts]
+localmind = "localmind.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
