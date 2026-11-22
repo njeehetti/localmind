@@ -63,7 +63,14 @@ def nir_is_valid(digits: str) -> bool:
 # Two letters, two check digits, then groups of letters/digits separated by single spaces.
 _IBAN = re.compile(r"\b[A-Za-z]{2}\d{2}[A-Za-z0-9]*(?: [A-Za-z0-9]+)*")
 _NIR = re.compile(r"(?<!\d)[12](?: ?\d){14}(?!\d)")
-_CARD = re.compile(r"(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)")
+# Real cards are written contiguous, 4-4-4-4(-3) or 4-6-5 (Amex), with one
+# consistent separator. Accepting a space anywhere would turn every pair of
+# dates on a bank statement ("2024-03-15 2024-03-17") into a candidate.
+_CARD = re.compile(
+    r"(?<![\d-])(?:\d{13,19}"
+    r"|\d{4}([ -])\d{4}\1\d{4}\1\d{1,7}"
+    r"|\d{4}([ -])\d{6}\2\d{5})(?![\d-])"
+)
 _PASSWORD = re.compile(
     r"^[^\S\n]*(?:password|passwd|pwd|mot de passe|mdp)[^\S\n]*[:=][^\S\n]*(\S+)",
     re.IGNORECASE | re.MULTILINE,

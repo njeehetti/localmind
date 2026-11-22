@@ -53,6 +53,8 @@ class ExtractedText:
     pages: tuple[str, ...]
     kind: str  # "text" or "pdf"
     encoding: str | None = None
+    # 1-based numbers of PDF pages that draw a raster image (scans, photos).
+    image_pages: frozenset[int] = frozenset()
 
     @property
     def text(self) -> str:
@@ -105,8 +107,27 @@ def _extract_pdf(path: Path) -> ExtractedText:
         if reader.is_encrypted and reader.decrypt("") == PasswordType.NOT_DECRYPTED:
             raise EncryptedPdf("PDF is password-protected")
         pages = tuple(page.extract_text() or "" for page in reader.pages)
+        image_pages = frozenset(
+            n for n, page in enumerate(reader.pages, start=1) if _has_image(page)
+        )
     except EncryptedPdf:
         raise
     except (PdfReadError, OSError, ValueError, KeyError) as exc:
         raise ExtractionError(f"cannot parse PDF: {exc}") from exc
-    return ExtractedText(pages=pages, kind="pdf")
+    return ExtractedText(pages=pages, kind="pdf", image_pages=image_pages)
+
+
+def _has_image(page) -> bool:
+    """True if the page's resources hold an image XObject.
+
+    A scanner app often adds a tiny text layer ("Scanned with ...") on top of
+    the picture: counting characters alone would mistake the scan for text.
+    """
+    resources = page.get("/Resources")
+    if resources is None:
+        return False
+    xobjects = resources.get_object().get("/XObject")
+    if xobjects is None:
+        return False
+    xobjects = xobjects.get_object()
+    return any(xobjects[name].get_object().get("/Subtype") == "/Image" for name in xobjects)

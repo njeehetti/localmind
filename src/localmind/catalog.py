@@ -215,6 +215,12 @@ class Catalog:
         ).fetchone()
         return _file_record(row) if row else None
 
+    def files_by_hash(self, file_hash: str) -> list[FileRecord]:
+        rows = self._conn.execute(
+            f"SELECT {_FILE_COLUMNS} FROM files WHERE file_hash = ? ORDER BY path", (file_hash,)
+        ).fetchall()
+        return [_file_record(r) for r in rows]
+
     def document_id_by_content_key(self, content_key: str) -> int | None:
         row = self._conn.execute(
             "SELECT id FROM documents WHERE content_key = ?", (content_key,)

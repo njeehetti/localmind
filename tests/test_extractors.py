@@ -86,6 +86,18 @@ def test_pdf_pages_are_separate(tmp_path):
     assert len(r.pages) == 2 and "One" in r.pages[0] and "Two" in r.pages[1]
 
 
+def test_pdf_pages_with_images_are_reported(tmp_path):
+    f = tmp_path / "scan.pdf"
+    f.write_bytes(make_pdf(["Scanned with CamScanner", "Plain text page here"], image_pages={1}))
+    assert extract(f).image_pages == frozenset({1})
+
+
+def test_text_file_has_no_image_pages(tmp_path):
+    f = tmp_path / "a.txt"
+    f.write_text("x y z", encoding="utf-8")
+    assert extract(f).image_pages == frozenset()
+
+
 def test_encrypted_pdf_raises_encrypted(tmp_path):
     from pypdf import PdfWriter
 

@@ -61,6 +61,23 @@ def test_machine_log():
     assert assess(txt(log), QualityConfig()).quarantine_reason is Reason.MACHINE_LOG
 
 
+def test_diary_with_dated_lines_is_not_a_log():  # final review Important #4
+    diary = "\n".join(f"2024-03-{i + 1:02d} Courses au marché, 45,20 €, avec Marie" for i in range(24))
+    assert not is_machine_log(diary, QualityConfig())
+
+
+def test_scan_with_watermark_text_layer_needs_ocr():  # final review Important #1
+    pages = ("Scanned with CamScanner",) * 3
+    scan = ExtractedText(pages=pages, kind="pdf", image_pages=frozenset({1, 2, 3}))
+    assert assess(scan, QualityConfig()).quarantine_reason is Reason.NEEDS_OCR
+
+
+def test_image_page_with_real_text_layer_is_usable():
+    long_text = GOOD * 5  # an OCR-ed scan or a letter with a logo
+    doc = ExtractedText(pages=(long_text,), kind="pdf", image_pages=frozenset({1}))
+    assert assess(doc, QualityConfig()).quarantine_reason is None
+
+
 def test_short_log_like_text_is_not_a_log():
     log = "\n".join(f"2024-03-01 INFO line {i}" for i in range(5))
     assert not is_machine_log(log, QualityConfig())

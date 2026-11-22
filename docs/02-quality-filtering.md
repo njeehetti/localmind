@@ -30,6 +30,7 @@ cannot override these: there is no text to accept.
 | PDF locked by a real password | file | `encrypted` |
 | 0 bytes, or text file with only whitespace | file | `empty` |
 | PDF page with < 20 visible characters | page | `needs_ocr` |
+| PDF page that draws an image and has < 200 visible characters (a scan with a thin text layer such as "Scanned with CamScanner") | page | `needs_ocr` |
 
 **Level B, quality**: there is text, but it would pollute search. `accept` overrides them.
 
@@ -37,7 +38,7 @@ cannot override these: there is no text to accept.
 |------|-------|---------|
 | fewer than 3 words in the whole document | document | `too_short` |
 | less than 70 % "normal" characters | page | `garbled` |
-| ≥ 20 lines, ≥ 60 % of them start with a timestamp or log level | document | `machine_log` |
+| ≥ 20 lines, ≥ 60 % of them start with date + time, a time, or a log level (a date alone is not enough: diaries and expense lists start with dates) | document | `machine_log` |
 
 "Normal" characters are letters (any script), digits, spaces, punctuation and symbols
 such as `€`, `°`, `+`. Control characters and `U+FFFD` (the replacement character left
@@ -70,6 +71,10 @@ Change the last digit to 7 and the sum becomes 81: rejected. That is why a long 
 number is almost never mistaken for a card, and why numbers are never "trimmed" to find
 a valid prefix (each shorter prefix would be one more 1-in-10 chance of a false alarm).
 
+Card candidates must also look like real cards: contiguous digits, `4-4-4-4(-3)` or
+`4-6-5` with one consistent separator. Allowing a space anywhere made about 1 in 10
+pairs of dates on a bank statement (`2024-03-15 2024-03-17`) pass as a card.
+
 Password lines (`password: ...`, `mot de passe : ...`, `mdp=...`) have no checksum; they
 are matched only at the start of a line followed by `:` or `=`, so "Mot de passe oublié ?"
 is not flagged.
@@ -99,7 +104,7 @@ unrelated scans were reported as duplicates. Now:
 | `localmind quarantine retry [PATH]` | re-judge quarantined and partial files with the current settings |
 
 Decisions are stored by **file hash**, not path: they survive renames and moves, and a
-copy of an ignored file is ignored too. They apply immediately (a decision that waited
+copy of an ignored file is ignored too, including copies already in the catalog. They apply immediately (a decision that waited
 for the next `ingest` would never apply: the file would be skipped as unchanged).
 
 Known limit: `retry` only revisits quarantined and partial files. Switching the

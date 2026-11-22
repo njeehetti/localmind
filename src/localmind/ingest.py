@@ -100,7 +100,9 @@ def retry(
 def apply_decision(
     path: Path, decision: Decision, catalog: Catalog, config: QualityConfig = _DEFAULT_CONFIG
 ) -> FileResult:
-    """Record the user's decision for this content and apply it right away."""
+    """Record the user's decision for this content and apply it right away,
+    to this file and to every exact copy already in the catalog (decisions are
+    about content, not about one path)."""
     path = path.resolve()
     record = catalog.file_by_path(path)
     if record is None:
@@ -108,8 +110,25 @@ def apply_decision(
     exists = path.is_file()
     file_hash = file_sha256(path) if exists else record.file_hash
     catalog.record_decision(file_hash, decision)
+
+    copies = [r for r in catalog.files_by_hash(file_hash) if r.path != path]
+    result = _apply_to(path, exists, record.size_bytes, file_hash, decision, catalog, config)
+    for copy in copies:
+        _apply_to(copy.path, copy.path.is_file(), copy.size_bytes, file_hash, decision, catalog, config)
+    return result
+
+
+def _apply_to(
+    path: Path,
+    exists: bool,
+    known_size: int,
+    file_hash: str,
+    decision: Decision,
+    catalog: Catalog,
+    config: QualityConfig,
+) -> FileResult:
     if decision is Decision.IGNORE:
-        size = path.stat().st_size if exists else record.size_bytes
+        size = path.stat().st_size if exists else known_size
         catalog.record_ignored(path, file_hash, size)
         return FileResult(path, Outcome.IGNORED, "ignored by user")
     if not exists:

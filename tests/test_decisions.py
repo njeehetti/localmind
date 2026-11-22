@@ -69,6 +69,29 @@ def test_ignore_keeps_document_shared_with_another_file(catalog, inbox):
     assert catalog.stats().documents == 1
 
 
+def test_ignore_applies_to_exact_copies(catalog, inbox):  # final review Important #2
+    (inbox / "backup").mkdir()
+    (inbox / "note.txt").write_text(GOOD, encoding="utf-8")
+    (inbox / "backup" / "note.txt").write_text(GOOD, encoding="utf-8")
+    ingest(inbox, catalog)
+
+    apply_decision(inbox / "note.txt", Decision.IGNORE, catalog)
+
+    assert catalog.stats().documents == 0
+    assert catalog.stats().ignored == 2
+
+
+def test_accept_applies_to_exact_copies(catalog, inbox):
+    (inbox / "backup").mkdir()
+    (inbox / "short.txt").write_text("appeler", encoding="utf-8")
+    (inbox / "backup" / "short.txt").write_text("appeler", encoding="utf-8")
+    ingest(inbox, catalog)
+
+    apply_decision(inbox / "short.txt", Decision.ACCEPT, catalog)
+
+    assert catalog.quarantined_files() == []
+
+
 def test_decision_on_unknown_path_raises(catalog, inbox):
     f = inbox / "never.txt"
     f.write_text(GOOD, encoding="utf-8")

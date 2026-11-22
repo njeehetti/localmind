@@ -44,6 +44,9 @@ class QualityConfig:
     # A: a PDF page with fewer visible characters has no real text layer
     # (a scan, maybe with a page number): it needs OCR.
     min_page_chars: int = 20
+    # A: a PDF page that draws an image and has fewer visible characters than
+    # this is a scan with a thin text layer (watermark, header): it needs OCR.
+    scan_page_max_chars: int = 200
     # B: fewer words than this in the whole document is not worth indexing.
     min_doc_words: int = 3
     # B: below this share of "normal" characters, a page is garbage.
@@ -83,7 +86,9 @@ class Assessment:
 # modifiers (^ = Sk), other symbols (° = So). "%" is punctuation (Po).
 _NORMAL_SYMBOLS = {"Sc", "Sm", "Sk", "So"}
 _LOG_LINE = re.compile(
-    r"^\s*\[?\s*(?:\d{4}-\d{2}-\d{2}|\d{2}:\d{2}:\d{2}|"
+    # A date alone is not a log line (diaries, expense lists start with dates):
+    # a log line starts with date + time, a time, or a level keyword.
+    r"^\s*\[?\s*(?:\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}|\d{2}:\d{2}:\d{2}|"
     r"(?:DEBUG|INFO|WARN|WARNING|ERROR|CRITICAL|TRACE)\b)"
 )
 
@@ -119,9 +124,15 @@ def _visible_chars(text: str) -> int:
 # --- assessment -------------------------------------------------------------
 
 
-def _page_reason(text: str, kind: str, config: QualityConfig, accepted: bool) -> Reason | None:
-    if kind == "pdf" and _visible_chars(text) < config.min_page_chars:
-        return Reason.NEEDS_OCR  # level A
+def _page_reason(
+    text: str, is_image_page: bool, kind: str, config: QualityConfig, accepted: bool
+) -> Reason | None:
+    if kind == "pdf":
+        visible = _visible_chars(text)
+        if visible < config.min_page_chars:
+            return Reason.NEEDS_OCR  # level A: no text layer
+        if is_image_page and visible < config.scan_page_max_chars:
+            return Reason.NEEDS_OCR  # level A: a scan with a thin text layer
     if not accepted and is_garbled(text, config):
         return Reason.GARBLED  # level B
     return None
@@ -135,7 +146,8 @@ def assess(extracted: ExtractedText, config: QualityConfig, *, accepted: bool = 
 
     pages = []
     for page_no, text in enumerate(extracted.pages, start=1):
-        reason = _page_reason(text, extracted.kind, config, accepted)
+        is_image_page = page_no in extracted.image_pages
+        reason = _page_reason(text, is_image_page, extracted.kind, config, accepted)
         spans = find_sensitive(text) if reason is None else ()
         pages.append(PageVerdict(page_no, text, reason, spans))
     verdicts = tuple(pages)

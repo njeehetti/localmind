@@ -28,6 +28,28 @@ def test_order_number_failing_luhn_is_not_flagged():
     assert kinds("Commande n° 4539578763621487") == []
 
 
+def test_date_pairs_on_bank_statements_are_not_cards():  # final review Important #3
+    import datetime
+
+    day = datetime.date(2024, 1, 1)
+    flagged = []
+    for i in range(400):
+        a = day + datetime.timedelta(days=i)
+        b = a + datetime.timedelta(days=2)
+        line = f"{a.isoformat()} {b.isoformat()} PRLV SEPA EDF 84,20"
+        if kinds(line):
+            flagged.append(line)
+    assert flagged == []
+
+
+def test_spaced_number_lists_are_not_cards():
+    assert kinds("Scores : 12 34 56 78 90 11 22 33") == []
+
+
+def test_card_in_4_6_5_grouping_found():
+    assert kinds("Amex 3714 496353 98431") == ["card"]
+
+
 def test_nir_key():
     assert nir_is_valid("185057800608491")  # 1850578006084, key = 97 - (n mod 97) = 91
     assert not nir_is_valid("185057800608492")

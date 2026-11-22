@@ -161,6 +161,17 @@ def test_two_different_scans_are_not_duplicates(catalog, inbox):  # stage 1 bug
     assert catalog.duplicate_groups() == []
 
 
+def test_watermarked_scans_are_not_merged(catalog, inbox):  # final review Important #1
+    stamp = "Scanned with CamScanner"
+    (inbox / "contract_a.pdf").write_bytes(make_pdf([stamp] * 3, image_pages={1, 2, 3}))
+    (inbox / "contract_b.pdf").write_bytes(make_pdf([stamp] * 3 + [""], image_pages={1, 2, 3, 4}))
+
+    report = ingest(inbox, catalog)
+
+    assert set(outcomes(report).values()) == {Outcome.QUARANTINED}
+    assert set(reasons(report).values()) == {Reason.NEEDS_OCR}
+
+
 def test_partial_pdf(catalog, inbox):
     (inbox / "c.pdf").write_bytes(make_pdf([GOOD, ""]))
 
