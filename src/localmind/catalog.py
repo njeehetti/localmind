@@ -1,4 +1,4 @@
-"""The catalog: a SQLite database of *pointers* to your files (schema v3).
+"""The catalog: a SQLite database of *pointers* to your files (schema v4).
 
     files                       documents                 pages
     -------------------------   -----------------------   -------------------------
@@ -19,8 +19,10 @@
 * A quarantined file has no document: text-less files are never "duplicates"
   of each other just because their (empty) text is identical.
 * Original files are never moved, copied or modified; only their path is stored.
-* Migrations never touch ``decisions`` or ``ocr_cache``: they hold the user's
-  choices and hours of OCR work, which a new ``ingest`` cannot recreate.
+* Migrations never touch ``decisions``, ``ocr_cache`` or ``folder_decisions``:
+  they hold the user's choices and hours of OCR work, which a new ``ingest``
+  cannot recreate.
+* Stage 3 (folders, classifications, embeddings) lives in ``catalog_folders``.
 """
 
 from __future__ import annotations
@@ -34,10 +36,17 @@ from pathlib import Path
 from types import TracebackType
 from typing import Literal
 
+from localmind.catalog_folders import (
+    FOLDERS_SCHEMA,
+    Classification,
+    DocumentToClassify,
+    Folder,
+    FolderStore,
+)
 from localmind.ocr import OcrPage
 from localmind.quality import PageVerdict, Reason
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _PAGES_COLUMNS = """
     id              INTEGER PRIMARY KEY,
@@ -97,10 +106,13 @@ CREATE TABLE IF NOT EXISTS ocr_cache (
 CREATE INDEX IF NOT EXISTS idx_files_file_hash ON files(file_hash);
 CREATE INDEX IF NOT EXISTS idx_files_document ON files(document_id);
 CREATE INDEX IF NOT EXISTS idx_pages_document ON pages(document_id);
-""".replace("{pages_columns}", _PAGES_COLUMNS)
+""".replace("{pages_columns}", _PAGES_COLUMNS) + FOLDERS_SCHEMA
 
-# Tables a v1 catalog rebuild may drop. Never "decisions" nor "ocr_cache".
-_REBUILT_TABLES = ("sensitive_spans", "pages", "files", "documents")
+# Tables a v1 catalog rebuild may drop. Never "decisions", "ocr_cache" nor
+# "folder_decisions".
+_REBUILT_TABLES = (
+    "classifications", "embeddings", "sensitive_spans", "pages", "files", "documents"
+)
 
 # v2 -> v3 in place. SQLite cannot change a CHECK constraint with ALTER TABLE,
 # so "pages" is copied into a new table with the new definition, then renamed.
@@ -209,7 +221,7 @@ def _file_record(row: tuple) -> FileRecord:
     return FileRecord(Path(path), file_hash, size, FileStatus(status), _reason(reason), document_id)
 
 
-class Catalog:
+class Catalog(FolderStore):
     def __init__(self, db_path: Path) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(db_path)
@@ -227,6 +239,7 @@ class Catalog:
           ``ingest`` recreates them (originals are untouched). ``decisions`` and
           ``ocr_cache`` are never dropped.
         * v2 (stage 2a) is upgraded in place: nothing is lost.
+        * v3 (stage 2b) -> v4 only adds the stage 3 tables.
         """
         version = self._conn.execute("PRAGMA user_version").fetchone()[0]
         has_tables = self._conn.execute(
@@ -234,6 +247,8 @@ class Catalog:
         ).fetchone()[0]
         if version >= SCHEMA_VERSION or not has_tables:
             return False
+        if version == 3:
+            return False  # v3 -> v4 only adds tables: _SCHEMA creates them
         if version == 2:
             self._conn.commit()
             self._conn.execute("PRAGMA foreign_keys = OFF")  # no effect inside a transaction

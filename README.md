@@ -16,7 +16,7 @@ on your machine: no cloud, no API key, your files never leave your disk.
 | 1 | [Ingestion](docs/01-ingestion.md) | Text extraction, encodings, PDF internals, content hashing, deduplication | ✅ |
 | 2a | [Filtering & quarantine](docs/02-quality-filtering.md) | Page-level quality rules, thresholds, checksums (Luhn, mod 97), user decisions | ✅ |
 | 2b | [OCR](docs/02b-ocr.md) | Neural OCR (docTR, PyTorch, GPU) for scans and photos, confidence, caching | ✅ |
-| 3 | Classification | Zero-shot sorting into folders with a local LLM | ⏳ |
+| 3 | [Classification](docs/03-classification.md) | Embeddings, cosine similarity, a local LLM as second judge, virtual folders | ✅ |
 | 4 | Chunking & embeddings | Turning text into vectors | ⏳ |
 | 5 | Retrieval | Vector search, BM25, hybrid search | ⏳ |
 | 6 | Generation | Grounded answers with citations (Ollama) | ⏳ |
@@ -49,6 +49,20 @@ OCR runs on your machine (NVIDIA GPU if available, otherwise CPU, about 10× slo
 The only network access is docTR downloading its model weights once.
 No NVIDIA GPU? Delete the `[tool.uv.sources]` and `[[tool.uv.index]]` sections of
 `pyproject.toml` before `uv sync --extra ocr` to get the smaller CPU build of PyTorch.
+
+### Sorting into folders (local LLM)
+
+```bash
+ollama pull qwen3:8b && ollama pull nomic-embed-text
+uv run localmind ingest ~/Documents/inbox   # classifies new documents into Domain/Type folders
+uv run localmind folders                    # the tree: Maison / Factures (12) ...
+uv run localmind folders review             # confirm proposed folders, answer hesitations
+uv run localmind move FILE Maison/Contrats  # your choice, remembered for good
+```
+
+Folders are virtual (rows in the catalog): nothing is moved. Models run in
+[Ollama](https://ollama.com) on `localhost`; sensitive values are masked before anything
+reaches them. Without Ollama, `ingest` still works (`--no-classify` skips the step).
 
 ## Use it as a library
 

@@ -5,16 +5,19 @@ Sensitive values are never printed: only their kind and page number.
 OCR is offered, never imposed: at the end of an interactive ``ingest`` that
 left scanned pages behind, the user is asked. When nobody can answer (a
 script, a voice assistant), nothing is asked and nothing slow is started.
+The same goes for classification into folders (``cli_folders``).
 """
 
 from __future__ import annotations
 
 import argparse
 import math
+import os
 import sys
 from pathlib import Path
 from typing import get_args
 
+from localmind import cli_folders
 from localmind.catalog import Catalog, Decision, PendingOcr
 from localmind.config import default_db_path, sensitive_policy_from_env
 from localmind.ingest import IngestReport, Outcome, apply_decision, ingest, retry, run_ocr
@@ -62,8 +65,23 @@ def _print_report(report: IngestReport, verbose: bool) -> None:
 
 
 def _is_interactive() -> bool:
-    """Can someone answer a question? (False in scripts, pipes, JARVIS.)"""
-    return sys.stdin.isatty()
+    """Can someone answer a question? (False in scripts, pipes, JARVIS.)
+
+    On Windows the NUL device (``< NUL``, ``< /dev/null``) claims to be a
+    terminal: only a real console counts."""
+    if not sys.stdin.isatty():
+        return False
+    if os.name != "nt":
+        return True
+    import ctypes
+    import msvcrt
+
+    try:
+        handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+    except (OSError, ValueError):
+        return False
+    mode = ctypes.c_uint32()
+    return bool(ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
 
 
 def _ask(prompt: str) -> bool:
@@ -145,7 +163,10 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
     with _open_catalog(args.db) as catalog:
         for path in args.paths:
             _print_report(ingest(path, catalog, _config(args)), args.verbose)
-        _offer_ocr(catalog, [p.resolve() for p in args.paths], args)
+        resolved = [p.resolve() for p in args.paths]
+        _offer_ocr(catalog, resolved, args)
+        if not args.no_classify:
+            cli_folders.classify_and_review(catalog, resolved)
     return 0
 
 
@@ -272,6 +293,9 @@ def build_parser() -> argparse.ArgumentParser:
     ocr_choice.add_argument(
         "--no-ocr", dest="ocr", action="store_false", help="do not offer OCR"
     )
+    p_ingest.add_argument(
+        "--no-classify", action="store_true", help="do not sort the documents into folders"
+    )
     p_ingest.set_defaults(func=_cmd_ingest)
 
     sub.add_parser("stats", help="catalog summary").set_defaults(func=_cmd_stats)
@@ -300,10 +324,20 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("path", type=Path)
         p.set_defaults(func=_cmd_decide, decision=decision)
 
+    cli_folders.register(sub)
     return parser
 
 
+def _utf8_output() -> None:
+    """Write UTF-8 even when the output is redirected on Windows (where the
+    default is a legacy code page that cannot encode "→" or many names)."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure") and (stream.encoding or "").lower() != "utf-8":
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_output()
     args = build_parser().parse_args(argv)
     return args.func(args)
 
