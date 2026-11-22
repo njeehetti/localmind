@@ -6,7 +6,7 @@
 
 **Architecture:** Two new pure modules (`sensitive.py`, `quality.py`) decide; `catalog.py` (schema v2) stores; `ingest.py` orchestrates; `cli.py` stays a thin facade. Extractors now return pages.
 
-**Tech Stack:** Python ≥ 3.11, SQLite (stdlib), `pypdf[crypto]`, pytest. Run everything from `C:\Users\njee2\Projets\Perso\localmind` with `uv run`.
+**Tech Stack:** Python ≥ 3.11, SQLite (stdlib), `pypdf[crypto]`, pytest. Run everything from the repository root with `uv run`.
 
 **Spec:** `docs/superpowers/specs/2026-11-22-stage2a-quarantine-design.md`
 
