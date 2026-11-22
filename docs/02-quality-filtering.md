@@ -25,7 +25,7 @@ cannot override these: there is no text to accept.
 | Rule | Scope | Reason |
 |------|-------|--------|
 | unknown extension | file | `unsupported_format` |
-| image (`.png`, `.jpg`...) | file | `needs_ocr` (stage 2b will read it) |
+| image (`.png`, `.jpg`...) not read by OCR yet | page | `needs_ocr` (see [stage 2b](02b-ocr.md)) |
 | extraction fails | file | `corrupted` |
 | PDF locked by a real password | file | `encrypted` |
 | 0 bytes, or text file with only whitespace | file | `empty` |
