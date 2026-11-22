@@ -261,7 +261,11 @@ Ingest finishes normally; documents stay unclassified ("À trier" with reason
 - Models: defaults `qwen3:8b` and `nomic-embed-text`, overridable by `LOCALMIND_LLM` and
   `LOCALMIND_EMBED_MODEL`; Ollama URL `LOCALMIND_OLLAMA_URL` (default `http://localhost:11434`).
 - 8 GB of VRAM: Ollama loads one model at a time as needed; classification never runs at the
-  same time as OCR (it runs after it).
+  same time as OCR (it runs after it). The LLM runs with `num_ctx 4096` (measured: 5.6 GB, 100 %
+  GPU; Ollama's default 16k context spills 20 % onto the CPU), and the last call of a run asks
+  Ollama to unload it (`keep_alive: 0`), so JARVIS's own model (`qwen3.5:4b`, 3.1 GB) gets the
+  GPU back. Classification happens at ingest time, never while JARVIS answers: JARVIS only
+  reads folders from the catalog (no model call).
 - Tests never call a real model except one opt-in test skipped when Ollama is not reachable.
 - End-to-end checks only on generated scratch documents, never the user's files.
 
@@ -281,3 +285,15 @@ Ingest finishes normally; documents stay unclassified ("À trier" with reason
 - Domain and type names are compared separately for the anti-sprawl rule; 0.90 is
   configurable (5.5). (designer call)
 - Corrections follow the file path when a file is edited in place (7). (user's choice: A)
+
+## 12. Spike results (2026-11-22, generated French documents)
+
+- `nomic-embed-text` on 35 generated documents of 7 types (EDF and internet invoices,
+  payslips, health refunds, leases, prescriptions, tax notices): same-type cosine 0.970 on
+  average (min 0.910), different-type 0.766 (max 0.848); leave-one-out top-1 35/35, all 35
+  "clear" under 0.80 / 0.05 (min best 0.93, min margin 0.13). **Gate passed: the model stays.**
+  Generated documents are more uniform than real ones; stage 7 measures on real data.
+- `qwen3:8b`, 4k context: ~10 s for the first call (model load), then ~2.5 s per document.
+- `qwen3.5:4b` (JARVIS's model) was tried as the classifier: not faster (3.5-5 s) and worse
+  (put a payslip, a health refund and a lease all in `Maison`, ignored the two-level format).
+  `qwen3:8b` stays the default.
