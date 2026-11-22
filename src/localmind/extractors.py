@@ -77,6 +77,8 @@ def extract(path: Path) -> ExtractedText:
         return _extract_text_file(path)
     if suffix in PDF_SUFFIXES:
         return _extract_pdf(path)
+    if suffix in IMAGE_SUFFIXES:
+        return _extract_image(path)
     raise UnsupportedFormat(f"unsupported file type: {suffix or '(none)'}")
 
 
@@ -136,3 +138,19 @@ def _has_image(page) -> bool:
         return False
     xobjects = xobjects.get_object()
     return any(xobjects[name].get_object().get("/Subtype") == "/Image" for name in xobjects)
+
+
+def _extract_image(path: Path) -> ExtractedText:
+    """A photo or a scan saved as an image: no text yet, one page per frame
+    (a multi-page TIFF fax has several). OCR fills the text in later."""
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        with Image.open(path) as img:
+            img.load()  # decode now: a truncated file fails here, not later
+            frames = getattr(img, "n_frames", 1)
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise ExtractionError(f"unreadable image: {exc.__class__.__name__}") from exc
+    return ExtractedText(
+        pages=("",) * frames, kind="image", image_pages=frozenset(range(1, frames + 1))
+    )

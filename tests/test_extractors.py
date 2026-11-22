@@ -1,4 +1,5 @@
 import pytest
+from PIL import Image
 
 from localmind.extractors import EncryptedPdf, ExtractionError, UnsupportedFormat, extract
 from tests.pdf_factory import make_pdf
@@ -67,8 +68,8 @@ def test_corrupted_pdf_raises_extraction_error(tmp_path):
 
 
 def test_unsupported_extension(tmp_path):
-    f = tmp_path / "photo.jpg"
-    f.write_bytes(b"\xff\xd8\xff")
+    f = tmp_path / "archive.zip"
+    f.write_bytes(b"PK\x03\x04")
     with pytest.raises(UnsupportedFormat):
         extract(f)
 
@@ -122,3 +123,24 @@ def test_pdf_encrypted_with_empty_password_is_readable(tmp_path):
     with f.open("wb") as s:
         w.write(s)
     assert "Hello world text" in extract(f).text
+
+
+def test_png_is_a_one_page_image(tmp_path):
+    f = tmp_path / "ticket.png"
+    Image.new("RGB", (40, 20), "white").save(f)
+    r = extract(f)
+    assert (r.kind, r.page_count, r.image_pages) == ("image", 1, frozenset({1}))
+
+
+def test_multi_page_tiff_has_one_page_per_frame(tmp_path):
+    f = tmp_path / "fax.tif"
+    frames = [Image.new("L", (40, 20), c) for c in (0, 128, 255)]
+    frames[0].save(f, save_all=True, append_images=frames[1:])
+    assert extract(f).page_count == 3
+
+
+def test_corrupted_image_raises_extraction_error(tmp_path):
+    f = tmp_path / "broken.jpg"
+    f.write_bytes(b"\xff\xd8\xff not really")
+    with pytest.raises(ExtractionError):
+        extract(f)
