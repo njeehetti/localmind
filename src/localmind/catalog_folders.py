@@ -157,6 +157,32 @@ class FolderStore:
             )
             return int(cursor.lastrowid)
 
+    def rename_folder_row(self, folder_id: int, name: FolderName) -> None:
+        """Rename in place; the folder becomes confirmed (the user named it)."""
+        with self._conn:
+            self._conn.execute(
+                "UPDATE folders SET domain = ?, type = ?, key = ?, confirmed = 1 WHERE id = ?",
+                (name.domain, name.type, _key(name), folder_id),
+            )
+
+    def merge_folders(self, source_id: int, target_id: int) -> None:
+        """Move everything from ``source`` into ``target`` and delete ``source``."""
+        with self._conn:
+            self._conn.execute(
+                "UPDATE classifications SET folder_id = ? WHERE folder_id = ?", (target_id, source_id)
+            )
+            self._conn.execute(
+                """UPDATE classifications SET alternative_folder_id = NULL
+                   WHERE alternative_folder_id IN (?, ?) AND folder_id = ?""",
+                (source_id, target_id, target_id),
+            )
+            self._conn.execute(
+                "UPDATE classifications SET alternative_folder_id = ? WHERE alternative_folder_id = ?",
+                (target_id, source_id),
+            )
+            self._conn.execute("UPDATE folders SET confirmed = 1 WHERE id = ?", (target_id,))
+            self._conn.execute("DELETE FROM folders WHERE id = ?", (source_id,))
+
     def delete_empty_llm_folders(self) -> None:
         with self._conn:
             self._conn.execute(
@@ -351,7 +377,8 @@ class FolderStore:
         return None
 
     def rekey_folder_decision(self, old_hash: str, new_hash: str, path: Path) -> None:
-        """A file edited in place: its decision now points at the new content."""
+        """A file edited in place: its decision also covers the new content.
+        The old row stays: an exact copy of the old version keeps its folder."""
         with self._conn:
             row = self._conn.execute(
                 "SELECT domain, type, decided_at FROM folder_decisions WHERE file_hash = ?",
@@ -359,7 +386,6 @@ class FolderStore:
             ).fetchone()
             if row is None or old_hash == new_hash:
                 return
-            self._conn.execute("DELETE FROM folder_decisions WHERE file_hash = ?", (old_hash,))
             self._conn.execute(
                 """INSERT OR REPLACE INTO folder_decisions
                    (file_hash, path, domain, type, decided_at) VALUES (?, ?, ?, ?, ?)""",
