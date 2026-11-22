@@ -12,8 +12,28 @@ dependencies = [
     "pypdfium2>=4.11",
 ]
 
+[project.optional-dependencies]
+# Neural OCR (stage 2b): `uv sync --extra ocr`. Heavy (~3 GB with PyTorch).
+ocr = [
+    "python-doctr>=1.1",
+    "torch>=2.6",
+    "torchvision",
+]
+
 [project.scripts]
 localmind = "localmind.cli:main"
+
+# PyTorch with CUDA (NVIDIA GPU) on Windows/Linux. CUDA 13.2 is the newest
+# variant publishing both torch and torchvision wheels for Python 3.13 on
+# Windows; NVIDIA drivers 58x+ support it. No NVIDIA GPU? See the README.
+[[tool.uv.index]]
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu132", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cu132", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]
 
 [dependency-groups]
 dev = [

@@ -12,6 +12,7 @@ and localmind keeps the quality of the guess next to the text.
 from __future__ import annotations
 
 import importlib.util
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
@@ -60,7 +61,61 @@ def ocr_available() -> bool:
     return importlib.util.find_spec("doctr") is not None
 
 
+DET_ARCH = "db_resnet50"  # finds where the text is (boxes around words)
+RECO_ARCH = "crnn_vgg16_bn"  # reads each box (French + English characters)
+
+
+class DoctrEngine:
+    """docTR: a two-stage neural OCR running on PyTorch.
+
+    1. *Detection*: a segmentation network looks at the whole page and outputs
+       boxes around words.
+    2. *Recognition*: each box is cropped and a second network reads it,
+       character by character, with a confidence per word.
+
+    The model is loaded once (slow: weights to read, GPU to warm up) and then
+    used for every page.
+    """
+
+    def __init__(self) -> None:
+        import doctr
+        import torch
+        from doctr.models import ocr_predictor
+
+        version = doctr.__version__.removeprefix("v")  # docTR reports "v1.1.0"
+        self.name = f"doctr-{version}/{DET_ARCH}+{RECO_ARCH}"
+        self._torch = torch
+        model = ocr_predictor(det_arch=DET_ARCH, reco_arch=RECO_ARCH, pretrained=True)
+        if torch.cuda.is_available():
+            self.device = "GPU"
+            model = model.to(torch.device("cuda"))
+        else:
+            self.device = "CPU"
+            print("note: no CUDA GPU found, OCR runs on the CPU (slower).", file=sys.stderr)
+        self._model = model.eval()
+
+    def read(self, image: Image.Image) -> tuple[str, float]:
+        import numpy as np
+
+        array = np.asarray(image.convert("RGB"))  # (height, width, 3) uint8
+        with self._torch.inference_mode():
+            page = self._model([array]).pages[0]
+        words: list[tuple[str, float]] = []
+        blocks = []
+        for block in page.blocks:
+            lines = []
+            for line in block.lines:
+                line_words = [(w.value, float(w.confidence)) for w in line.words]
+                words.extend(line_words)
+                lines.append(" ".join(value for value, _ in line_words))
+            blocks.append("\n".join(lines))
+        return "\n\n".join(blocks), page_confidence(words)
+
+
 def load_engine() -> OcrEngine:
     if not ocr_available():
         raise OcrUnavailable("OCR not installed: uv sync --extra ocr")
-    raise OcrUnavailable("docTR engine not implemented yet")
+    try:
+        return DoctrEngine()
+    except Exception as exc:  # e.g. weights download failed, CUDA error
+        raise OcrUnavailable(f"OCR engine failed to start: {exc}") from exc
