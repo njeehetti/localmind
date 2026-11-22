@@ -233,3 +233,20 @@ def test_classify_command_all_keeps_user_choices(env, inbox, capsys):
     assert "1 document(s) classified:" in out and "a.txt" not in out
     run(env, "folders", "show", "Maison/Factures")
     assert "a.txt" in capsys.readouterr().out
+
+
+def test_redirected_output_in_a_legacy_encoding_does_not_crash(tmp_path, inbox):
+    import os
+    import subprocess
+    import sys
+
+    write(inbox, "a.txt", invoice(0))
+    db = tmp_path / "x.db"
+    base = [sys.executable, "-m", "localmind.cli", "--db", str(db)]
+    subprocess.run([*base, "ingest", str(inbox), "--no-classify"], capture_output=True, check=True)
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+    out = subprocess.run(
+        [*base, "move", str(inbox / "a.txt"), "Maison/Factures"], capture_output=True, env=env
+    )
+    assert out.returncode == 0, out.stderr.decode(errors="replace")
+    assert "→ Maison/Factures (your choice)" in out.stdout.decode("utf-8")
