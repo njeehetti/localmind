@@ -271,20 +271,53 @@ class FolderStore:
         ).fetchone()
         return from_bytes(row[0]) if row else None
 
-    def examples(self, model: str, user_weight: int) -> list[Example]:
+    def examples(
+        self, model: str, user_weight: int, exclude: int | None = None
+    ) -> list[Example]:
         """Documents a new one is compared with: placed in a confirmed folder, or
-        waiting in a proposed (unconfirmed) one. Hesitations do not count."""
+        waiting in a proposed (unconfirmed) one. Hesitations do not count.
+        ``exclude``: the document being re-classified never matches itself."""
         rows = self._conn.execute(
             """SELECT c.folder_id, c.method, e.vector FROM classifications c
                JOIN folders f ON f.id = c.folder_id
                JOIN embeddings e ON e.document_id = c.document_id AND e.model = ?
-               WHERE (c.status = 'placed' AND f.confirmed = 1)
-                  OR (c.status = 'to_confirm' AND f.confirmed = 0)""",
-            (model,),
+               WHERE ((c.status = 'placed' AND f.confirmed = 1)
+                      OR (c.status = 'to_confirm' AND f.confirmed = 0))
+                 AND c.document_id IS NOT ?""",
+            (model, exclude),
         ).fetchall()
         return [
             Example(folder_id, from_bytes(vec), user_weight if method == "user" else 1)
             for folder_id, method, vec in rows
+        ]
+
+    def documents_missing_embedding(self, model: str) -> list[DocumentToClassify]:
+        """Classified documents with no vector for ``model`` (new embedding model,
+        or placed by a user decision without any model call)."""
+        ids = [
+            r[0]
+            for r in self._conn.execute(
+                """SELECT c.document_id FROM classifications c
+                   LEFT JOIN embeddings e ON e.document_id = c.document_id AND e.model = ?
+                   WHERE c.folder_id IS NOT NULL AND e.document_id IS NULL
+                   ORDER BY c.document_id""",
+                (model,),
+            )
+        ]
+        return [self._document_to_classify(i) for i in ids]
+
+    def user_examples(self, model: str) -> list[tuple[str, FolderName, list[float]]]:
+        """(file name, folder, vector) of documents placed by the user."""
+        rows = self._conn.execute(
+            """SELECT c.document_id, f.domain, f.type, e.vector FROM classifications c
+               JOIN folders f ON f.id = c.folder_id
+               JOIN embeddings e ON e.document_id = c.document_id AND e.model = ?
+               WHERE c.method = 'user' ORDER BY c.document_id""",
+            (model,),
+        ).fetchall()
+        return [
+            (self._document_to_classify(doc_id).name, FolderName(d, t), from_bytes(v))
+            for doc_id, d, t, v in rows
         ]
 
     # -- user decisions --------------------------------------------------
