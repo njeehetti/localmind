@@ -7,11 +7,14 @@ but every later stage depends on it. Garbage text in = garbage answers out.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from pypdf import PasswordType, PdfReader
 from pypdf.errors import PdfReadError
+
+from localmind.ocr import OcrPage
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +54,12 @@ class ExtractedText:
     """Extracted content, one string per page (a text file is a single page)."""
 
     pages: tuple[str, ...]
-    kind: str  # "text" or "pdf"
+    kind: str  # "text", "pdf" or "image"
     encoding: str | None = None
-    # 1-based numbers of PDF pages that draw a raster image (scans, photos).
+    # 1-based numbers of pages that draw a raster image (scans, photos).
     image_pages: frozenset[int] = frozenset()
+    # 1-based page -> what OCR read there (filled by ingestion, never by extract).
+    ocr: Mapping[int, OcrPage] = field(default_factory=dict)
 
     @property
     def text(self) -> str:
@@ -63,7 +68,7 @@ class ExtractedText:
 
     @property
     def page_count(self) -> int | None:
-        return len(self.pages) if self.kind == "pdf" else None
+        return len(self.pages) if self.kind in ("pdf", "image") else None
 
 
 def extract(path: Path) -> ExtractedText:
@@ -72,6 +77,8 @@ def extract(path: Path) -> ExtractedText:
         return _extract_text_file(path)
     if suffix in PDF_SUFFIXES:
         return _extract_pdf(path)
+    if suffix in IMAGE_SUFFIXES:
+        return _extract_image(path)
     raise UnsupportedFormat(f"unsupported file type: {suffix or '(none)'}")
 
 
@@ -131,3 +138,20 @@ def _has_image(page) -> bool:
         return False
     xobjects = xobjects.get_object()
     return any(xobjects[name].get_object().get("/Subtype") == "/Image" for name in xobjects)
+
+
+def _extract_image(path: Path) -> ExtractedText:
+    """A photo or a scan saved as an image: no text yet, one page per frame
+    (a multi-page TIFF fax has several). OCR fills the text in later."""
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        with Image.open(path) as img:
+            img.load()  # decode now: a truncated file fails here, not later
+            frames = getattr(img, "n_frames", 1)
+    except (UnidentifiedImageError, OSError, ValueError, TypeError, SyntaxError, EOFError,
+            Image.DecompressionBombError) as exc:  # too large, truncated, malformed
+        raise ExtractionError(f"unreadable image: {exc.__class__.__name__}") from exc
+    return ExtractedText(
+        pages=("",) * frames, kind="image", image_pages=frozenset(range(1, frames + 1))
+    )

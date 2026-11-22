@@ -5,34 +5,43 @@ Decision path for each file (cheapest checks first):
     1. same path, same bytes as last time?        -> UNCHANGED
     2. user said "ignore" for these bytes?        -> IGNORED
     3. same bytes as another known file?          -> DUPLICATE (or QUARANTINED, like it)
-    4. empty / image / unreadable / encrypted?    -> QUARANTINED (level A, whole file)
-    5. judge each page, then the document         -> QUARANTINED if nothing usable
-    6. same usable text as a known document?      -> DUPLICATE
-    7. otherwise                                  -> NEW / UPDATED / PARTIAL
+    4. empty / unreadable / encrypted?            -> QUARANTINED (level A, whole file)
+    5. pages without a text layer: OCR text from the cache, or from the engine
+       if one was given (stage 2b)
+    6. judge each page, then the document         -> QUARANTINED if nothing usable
+    7. same usable text as a known document?      -> DUPLICATE
+    8. otherwise                                  -> NEW / UPDATED / PARTIAL
 
-`retry` and `apply_decision` run the same path but skip steps 1 and 3 (force):
-the point is to re-judge the file, not to recognise it.
+`retry`, `run_ocr` and `apply_decision` run the same path but skip steps 1
+and 3 (force): the point is to re-judge the file, not to recognise it.
+
+OCR results are cached by (file hash, page): a cached page is always used,
+the engine (slow, GPU) runs only when the caller passes one.
 """
 
 from __future__ import annotations
 
 import logging
 from collections import Counter
-from collections.abc import Iterator
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
 from localmind.catalog import Catalog, Decision, FileRecord, FileStatus
 from localmind.extractors import (
-    IMAGE_SUFFIXES,
     EncryptedPdf,
+    ExtractedText,
     ExtractionError,
     UnsupportedFormat,
     extract,
 )
 from localmind.hashing import content_hash, file_sha256
-from localmind.quality import QualityConfig, Reason, assess
+from localmind.ocr import OcrEngine, OcrPage
+from localmind.quality import QualityConfig, Reason, assess, needs_ocr_pages
+
+# Called just before the engine reads a page: (file, 1-based page number).
+OcrProgress = Callable[[Path, int], None]
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +76,17 @@ class IngestReport:
 _DEFAULT_CONFIG = QualityConfig()
 
 
+@dataclass(frozen=True)
+class _Ocr:
+    """What _process needs to read pages: an engine (or None) and a progress hook."""
+
+    engine: OcrEngine | None = None
+    on_page: OcrProgress | None = None
+
+
+_NO_OCR = _Ocr()
+
+
 def iter_files(root: Path) -> Iterator[Path]:
     if root.is_file():
         yield root
@@ -74,26 +94,56 @@ def iter_files(root: Path) -> Iterator[Path]:
     yield from sorted(p for p in root.rglob("*") if p.is_file())
 
 
-def ingest(root: Path, catalog: Catalog, config: QualityConfig = _DEFAULT_CONFIG) -> IngestReport:
-    """Ingest a file or every file under a folder. Never modifies the files."""
+def ingest(
+    root: Path,
+    catalog: Catalog,
+    config: QualityConfig = _DEFAULT_CONFIG,
+    engine: OcrEngine | None = None,
+    on_ocr_page: OcrProgress | None = None,
+) -> IngestReport:
+    """Ingest a file or every file under a folder. Never modifies the files.
+    Pages without text are read by ``engine`` if one is given."""
+    ocr = _Ocr(engine, on_ocr_page)
     results = tuple(
-        _process(path.resolve(), catalog, config, force=False) for path in iter_files(root)
+        _process(path.resolve(), catalog, config, force=False, ocr=ocr)
+        for path in iter_files(root)
     )
     return IngestReport(results=results)
 
 
 def retry(
-    catalog: Catalog, config: QualityConfig = _DEFAULT_CONFIG, under: Path | None = None
+    catalog: Catalog,
+    config: QualityConfig = _DEFAULT_CONFIG,
+    under: Path | None = None,
+    engine: OcrEngine | None = None,
+    on_ocr_page: OcrProgress | None = None,
 ) -> IngestReport:
     """Re-judge quarantined files and files of partial documents (optionally only
     under a folder), with the current config and decisions."""
+    return _reprocess(catalog.retry_candidates(under), catalog, config, _Ocr(engine, on_ocr_page))
+
+
+def run_ocr(
+    catalog: Catalog,
+    engine: OcrEngine,
+    config: QualityConfig = _DEFAULT_CONFIG,
+    under: Path | None = None,
+    on_ocr_page: OcrProgress | None = None,
+) -> IngestReport:
+    """Read the pages waiting for OCR (optionally only under a path)."""
+    return _reprocess(catalog.ocr_candidates(under), catalog, config, _Ocr(engine, on_ocr_page))
+
+
+def _reprocess(
+    records: list[FileRecord], catalog: Catalog, config: QualityConfig, ocr: _Ocr
+) -> IngestReport:
     results = []
-    for record in catalog.retry_candidates(under):
+    for record in records:
         if not record.path.is_file():
             # Keep the catalog entry: the file may be on an unplugged drive.
             results.append(FileResult(record.path, Outcome.MISSING, "file not found"))
             continue
-        results.append(_process(record.path, catalog, config, force=True))
+        results.append(_process(record.path, catalog, config, force=True, ocr=ocr))
     return IngestReport(results=tuple(results))
 
 
@@ -140,13 +190,81 @@ def _apply_to(
 
 
 def _quarantine(
-    path: Path, file_hash: str, size: int, reason: Reason, catalog: Catalog, detail: str = ""
+    path: Path,
+    file_hash: str,
+    size: int,
+    reason: Reason,
+    catalog: Catalog,
+    detail: str = "",
+    page_count: int | None = None,
 ) -> FileResult:
-    catalog.record_quarantine(path, file_hash, size, reason)
+    catalog.record_quarantine(path, file_hash, size, reason, page_count)
     return FileResult(path, Outcome.QUARANTINED, detail or reason.value, reason)
 
 
-def _process(path: Path, catalog: Catalog, config: QualityConfig, *, force: bool) -> FileResult:
+def _with_ocr(
+    path: Path,
+    file_hash: str,
+    extracted: ExtractedText,
+    catalog: Catalog,
+    config: QualityConfig,
+    ocr: _Ocr,
+) -> ExtractedText:
+    """Attach OCR text to the pages that need it: from the cache, else from the
+    engine (one page rendered at a time, each result saved immediately)."""
+    wanted = sorted(needs_ocr_pages(extracted, config))
+    if not wanted:
+        return extracted
+    found: dict[int, OcrPage] = {}
+    to_read = []
+    for page_no in wanted:
+        engine_name = ocr.engine.name if ocr.engine is not None else None
+        cached = catalog.ocr_cached(file_hash, page_no, engine_name)
+        if cached is not None:
+            found[page_no] = cached
+        else:
+            to_read.append(page_no)
+    if to_read and ocr.engine is not None:
+        found.update(_read_pages(path, file_hash, to_read, catalog, ocr))
+    return replace(extracted, ocr=found) if found else extracted
+
+
+def _read_pages(
+    path: Path, file_hash: str, page_numbers: list[int], catalog: Catalog, ocr: _Ocr
+) -> dict[int, OcrPage]:
+    from localmind.rendering import render_pages
+
+    engine = ocr.engine
+    assert engine is not None
+    results: dict[int, OcrPage] = {}
+    pages = render_pages(path, page_numbers)
+    while True:
+        try:
+            page_no, image = next(pages)
+        except StopIteration:
+            break
+        except Exception as exc:  # truncated scan, pdfium error: fail what is left
+            logger.warning("cannot render %s: %s", path, exc.__class__.__name__)
+            for left in page_numbers:
+                results.setdefault(left, OcrPage("", -1.0, engine.name))
+            break
+        if ocr.on_page is not None:
+            ocr.on_page(path, page_no)
+        try:
+            text, confidence = engine.read(image)
+        except Exception as exc:  # one bad page must not stop a long run
+            logger.warning("OCR failed on %s page %d: %s", path, page_no, exc.__class__.__name__)
+            results[page_no] = OcrPage("", -1.0, engine.name)  # not cached: retry later
+            continue
+        page = OcrPage(text, confidence, engine.name)
+        catalog.store_ocr(file_hash, page_no, page)
+        results[page_no] = page
+    return results
+
+
+def _process(
+    path: Path, catalog: Catalog, config: QualityConfig, *, force: bool, ocr: _Ocr = _NO_OCR
+) -> FileResult:
     try:
         file_hash = file_sha256(path)
         size = path.stat().st_size
@@ -182,16 +300,29 @@ def _process(path: Path, catalog: Catalog, config: QualityConfig, *, force: bool
         logger.warning("extraction failed for %s: %s", path, exc)
         return _quarantine(path, file_hash, size, Reason.CORRUPTED, catalog, str(exc))
 
+    extracted = _with_ocr(path, file_hash, extracted, catalog, config, ocr)
     assessment = assess(extracted, config, accepted=decision is Decision.ACCEPT)
     if assessment.quarantine_reason is not None:
-        return _quarantine(path, file_hash, size, assessment.quarantine_reason, catalog)
+        return _quarantine(
+            path,
+            file_hash,
+            size,
+            assessment.quarantine_reason,
+            catalog,
+            page_count=extracted.page_count,
+        )
 
     # Dedup key: the usable text. A document with set-aside pages also carries
     # its file hash, otherwise two PDFs sharing a cover page but with different
-    # scanned pages would be merged and the second one's pages lost.
+    # scanned pages would be merged and the second one's pages lost. It also
+    # carries the set-aside verdicts, so a page moving from "needs_ocr" to
+    # "ocr_low_confidence" stores a new version instead of keeping the old one.
     key = content_hash(assessment.usable_text)
     if assessment.has_set_aside:
-        key = f"{key}:{file_hash}"
+        verdicts = ",".join(
+            f"{p.page_no}={p.reason}" for p in assessment.pages if p.reason and not p.is_blank
+        )
+        key = f"{key}:{file_hash}:{content_hash(verdicts)[:12]}"
 
     existing = catalog.document_id_by_content_key(key)
     if existing is not None:
@@ -226,8 +357,6 @@ def _file_level_reason(path: Path, size: int) -> Reason | None:
     """Level A rules that need no extraction."""
     if size == 0:
         return Reason.EMPTY
-    if path.suffix.lower() in IMAGE_SUFFIXES:
-        return Reason.NEEDS_OCR  # stage 2b (OCR) will pick these up
     return None
 
 

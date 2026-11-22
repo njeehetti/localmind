@@ -2,7 +2,7 @@
 
 **A fully local RAG over your own documents, built step by step to learn how RAG really works.**
 
-Drop any pile of TXT / Markdown / PDF files in. localmind reads them, removes duplicates,
+Drop any pile of TXT / Markdown / PDF files and photos of documents in. localmind reads them, removes duplicates,
 sorts them into folders on its own, and lets you ask questions about them. Everything runs
 on your machine: no cloud, no API key, your files never leave your disk.
 
@@ -15,7 +15,7 @@ on your machine: no cloud, no API key, your files never leave your disk.
 |---|-------|----------------|--------|
 | 1 | [Ingestion](docs/01-ingestion.md) | Text extraction, encodings, PDF internals, content hashing, deduplication | ✅ |
 | 2a | [Filtering & quarantine](docs/02-quality-filtering.md) | Page-level quality rules, thresholds, checksums (Luhn, mod 97), user decisions | ✅ |
-| 2b | OCR | Neural OCR (docTR) for scans and images | ⏳ |
+| 2b | [OCR](docs/02b-ocr.md) | Neural OCR (docTR, PyTorch, GPU) for scans and photos, confidence, caching | ✅ |
 | 3 | Classification | Zero-shot sorting into folders with a local LLM | ⏳ |
 | 4 | Chunking & embeddings | Turning text into vectors | ⏳ |
 | 5 | Retrieval | Vector search, BM25, hybrid search | ⏳ |
@@ -35,6 +35,20 @@ uv run localmind quarantine accept FILE     # keep it anyway
 
 The catalog lives in `~/.localmind/catalog.db` (override with `--db` or `LOCALMIND_DB`).
 **Your original files are never moved, modified or deleted**: localmind only stores pointers to them.
+
+### Reading scans and photos (optional OCR)
+
+```bash
+uv sync --extra ocr                         # docTR + PyTorch with CUDA (~2 GB download)
+uv cache prune                              # optional: reclaim the download cache
+uv run localmind ingest ~/Documents/inbox   # asks "Run OCR now? [y/N]" if scans were found
+uv run localmind quarantine retry           # or read waiting scans later
+```
+
+OCR runs on your machine (NVIDIA GPU if available, otherwise CPU, about 10× slower).
+The only network access is docTR downloading its model weights once.
+No NVIDIA GPU? Delete the `[tool.uv.sources]` and `[[tool.uv.index]]` sections of
+`pyproject.toml` before `uv sync --extra ocr` to get the smaller CPU build of PyTorch.
 
 ## Use it as a library
 

@@ -1,19 +1,28 @@
 """Command-line interface: a thin layer over the public API, no logic here.
 
 Sensitive values are never printed: only their kind and page number.
+
+OCR is offered, never imposed: at the end of an interactive ``ingest`` that
+left scanned pages behind, the user is asked. When nobody can answer (a
+script, a voice assistant), nothing is asked and nothing slow is started.
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 from typing import get_args
 
-from localmind.catalog import Catalog, Decision
+from localmind.catalog import Catalog, Decision, PendingOcr
 from localmind.config import default_db_path, sensitive_policy_from_env
-from localmind.ingest import IngestReport, Outcome, apply_decision, ingest, retry
+from localmind.ingest import IngestReport, Outcome, apply_decision, ingest, retry, run_ocr
+from localmind.ocr import OcrEngine, OcrUnavailable, load_engine, ocr_available
 from localmind.quality import QualityConfig, SensitivePolicy
+
+# Rough OCR speed (seconds per page), only used to warn before a long run.
+SECONDS_PER_PAGE = {"GPU": 0.5, "CPU": 5.0}
 
 _SYMBOLS = {
     Outcome.NEW: "+",
@@ -52,6 +61,81 @@ def _print_report(report: IngestReport, verbose: bool) -> None:
     print(f"\n{len(report.results)} file(s): {summary or 'nothing to do'}")
 
 
+def _is_interactive() -> bool:
+    """Can someone answer a question? (False in scripts, pipes, JARVIS.)"""
+    return sys.stdin.isatty()
+
+
+def _ask(prompt: str) -> bool:
+    try:
+        return input(prompt).strip().lower() in {"y", "yes", "o", "oui"}
+    except EOFError:
+        return False
+
+
+def _estimate(pages: int, device: str) -> str:
+    seconds = pages * SECONDS_PER_PAGE[device]
+    if seconds < 60:
+        return f"{max(1, math.ceil(seconds))} s"
+    return f"{math.ceil(seconds / 60)} min"
+
+
+def _load_engine() -> OcrEngine | None:
+    try:
+        return load_engine()
+    except OcrUnavailable as exc:
+        print(f"OCR unavailable: {exc}", file=sys.stderr)
+        return None
+
+
+def _run_ocr(catalog: Catalog, engine: OcrEngine, paths: list[Path], total: int, args) -> None:
+    done = 0
+
+    def progress(path: Path, page_no: int) -> None:
+        nonlocal done
+        done += 1
+        print(f"  OCR page {done}/{total}: {path.name} p.{page_no}", flush=True)
+
+    for path in paths:
+        report = run_ocr(catalog, engine, _config(args), under=path, on_ocr_page=progress)
+        _print_report(report, verbose=True)
+
+
+def _offer_ocr(catalog: Catalog, paths: list[Path], args: argparse.Namespace) -> None:
+    """After ingest: offer to read the scanned pages of the paths just ingested,
+    and remind (one line) of scanned pages waiting elsewhere in the catalog."""
+    counts = [catalog.ocr_pending(p) for p in paths]
+    pending = PendingOcr(sum(c.pages for c in counts), sum(c.files for c in counts))
+    others = catalog.ocr_pending().pages - pending.pages
+    if pending.pages > 0 and args.ocr is not False:
+        _offer_pending(catalog, paths, pending, args)
+    if others > 0:
+        print(f"({others} more scanned page(s) are waiting: localmind quarantine retry)")
+
+
+def _offer_pending(
+    catalog: Catalog, paths: list[Path], pending: PendingOcr, args: argparse.Namespace
+) -> None:
+    if not ocr_available():
+        print(f"{pending.pages} scanned page(s) could be read with OCR: uv sync --extra ocr")
+        return
+    if args.ocr is None and not _is_interactive():
+        print(f"{pending.pages} scanned page(s) can be read by OCR: localmind quarantine retry")
+        return
+
+    engine = _load_engine()
+    if engine is None:
+        return
+    if args.ocr is None:
+        print(
+            f"{pending.pages} scanned page(s) in {pending.files} file(s) can be read by OCR "
+            f"(~{_estimate(pending.pages, engine.device)} on {engine.device})."
+        )
+        if not _ask("Run OCR now? [y/N] "):
+            return
+    _run_ocr(catalog, engine, paths, pending.pages, args)
+
+
 def _cmd_ingest(args: argparse.Namespace) -> int:
     missing = [p for p in args.paths if not p.exists()]
     if missing:
@@ -61,6 +145,7 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
     with _open_catalog(args.db) as catalog:
         for path in args.paths:
             _print_report(ingest(path, catalog, _config(args)), args.verbose)
+        _offer_ocr(catalog, [p.resolve() for p in args.paths], args)
     return 0
 
 
@@ -77,6 +162,8 @@ def _cmd_stats(args: argparse.Namespace) -> int:
         ("quarantined", s.quarantined),
         ("ignored", s.ignored),
         ("sensitive flags", s.sensitive_flags),
+        ("ocr pages", s.ocr_pages),
+        ("blank pages", s.blank_pages),
     ]
     for label, value in rows:
         print(f"{label + ':':<17}{value}")
@@ -112,7 +199,8 @@ def _cmd_quarantine_list(args: argparse.Namespace) -> int:
 
     print(f"\nSet-aside pages ({len(pages)}):")
     for page in pages:
-        print(f"    {page.path}  page {page.page_no}  [{page.reason}]")
+        conf = f" {page.ocr_confidence:.0%}".replace("%", " %") if page.ocr_confidence is not None else ""
+        print(f"    {page.path}  page {page.page_no}  [{page.reason}{conf}]")
 
     print(f"\nSensitive data, kept and flagged ({len(flags)}):")
     for flag in flags:
@@ -122,8 +210,20 @@ def _cmd_quarantine_list(args: argparse.Namespace) -> int:
 
 def _cmd_retry(args: argparse.Namespace) -> int:
     under = args.path.resolve() if args.path else None
+    engine = None
+    if not args.no_ocr and ocr_available():
+        engine = _load_engine()
     with _open_catalog(args.db) as catalog:
-        _print_report(retry(catalog, _config(args), under), verbose=True)
+        total = catalog.ocr_pending(under).pages
+        done = 0
+
+        def progress(path: Path, page_no: int) -> None:
+            nonlocal done
+            done += 1
+            print(f"  OCR page {done}/{total}: {path.name} p.{page_no}", flush=True)
+
+        report = retry(catalog, _config(args), under, engine=engine, on_ocr_page=progress)
+        _print_report(report, verbose=True)
     return 0
 
 
@@ -164,6 +264,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_ingest.add_argument("paths", nargs="+", type=Path, help="files or folders")
     p_ingest.add_argument("-v", "--verbose", action="store_true", help="show unchanged files")
+    ocr_choice = p_ingest.add_mutually_exclusive_group()
+    ocr_choice.add_argument(
+        "--ocr", dest="ocr", action="store_true", default=None,
+        help="read scanned pages now, without asking",
+    )
+    ocr_choice.add_argument(
+        "--no-ocr", dest="ocr", action="store_false", help="do not offer OCR"
+    )
     p_ingest.set_defaults(func=_cmd_ingest)
 
     sub.add_parser("stats", help="catalog summary").set_defaults(func=_cmd_stats)
@@ -179,6 +287,9 @@ def build_parser() -> argparse.ArgumentParser:
         "retry", parents=[policy], help="re-judge quarantined and partial files"
     )
     p_retry.add_argument("path", nargs="?", type=Path, help="only files under this path")
+    p_retry.add_argument(
+        "--no-ocr", action="store_true", help="do not run OCR (cached OCR text still applies)"
+    )
     p_retry.set_defaults(func=_cmd_retry)
 
     for name, decision, help_text in (
