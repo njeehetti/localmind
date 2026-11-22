@@ -10,6 +10,13 @@ from localmind.quality import SensitivePolicy
 
 ENV_DB = "LOCALMIND_DB"
 ENV_SENSITIVE_POLICY = "LOCALMIND_SENSITIVE_POLICY"
+ENV_LLM = "LOCALMIND_LLM"
+ENV_EMBED_MODEL = "LOCALMIND_EMBED_MODEL"
+ENV_OLLAMA_URL = "LOCALMIND_OLLAMA_URL"
+
+DEFAULT_LLM = "qwen3:8b"
+DEFAULT_EMBED_MODEL = "nomic-embed-text"
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
 
 
 def default_db_path() -> Path:
