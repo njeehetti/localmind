@@ -258,3 +258,16 @@ def test_null_device_is_not_a_terminal(monkeypatch):
     with open(os.devnull) as null:
         monkeypatch.setattr("sys.stdin", null)
         assert cli._is_interactive() is False
+
+
+def test_waiting_document_of_a_confirmed_proposal_can_be_accepted(env, inbox, capsys):
+    write(inbox, "facture_0.txt", invoice(0))
+    write(inbox, "facture_1.txt", invoice(1))
+    run(env, "ingest", str(inbox))
+    run(env, "move", str(inbox / "facture_0.txt"), "Maison/Factures")  # confirms the proposal
+    env["tty"], env["answers"] = True, ["1"]
+    capsys.readouterr()
+    assert run(env, "folders", "review") == 0
+    assert "facture_1.txt" in capsys.readouterr().out
+    assert env["prompts"] == ["  [1] Maison/Factures  [o] other  [l] later "]
+    assert pending(env) == 0

@@ -133,3 +133,36 @@ def test_empty_llm_folder_disappears_after_moves(catalog, inbox):
     proposal(catalog, inbox, n=1, folder="Divers/Autres")
     move(catalog, inbox / "facture_0.txt", "Maison/Factures")
     assert [str(f.name) for f in catalog.folders()] == ["Maison/Factures"]
+
+
+def test_correction_survives_editing_one_of_two_existing_copies(catalog, inbox):
+    (inbox / "sub").mkdir()
+    add(catalog, inbox, "a.txt", invoice(1))
+    shutil.copy(inbox / "a.txt", inbox / "sub" / "b.txt")  # the copy exists BEFORE the correction
+    ingest(inbox, catalog)
+    move(catalog, inbox / "a.txt", "Maison/Factures")
+    (inbox / "a.txt").write_text(invoice(1) + " Rectificatif.", encoding="utf-8")
+    ingest(inbox, catalog)
+    classify(catalog, FakeClassifier(lambda p: answer("Divers/Autres", new_folder=True)))
+    for name in ("a.txt", "sub/b.txt"):
+        c = catalog.classification(catalog.document_for_path((inbox / name).resolve()).id)
+        assert (str(catalog.folder(c.folder_id).name), c.method) == ("Maison/Factures", "user")
+
+
+def test_rename_and_merge_keep_unanswered_hesitations_open(catalog, inbox):
+    from localmind.catalog import Classification
+
+    add(catalog, inbox, "a.txt", invoice(1))
+    move(catalog, inbox / "a.txt", "Maison/Factures")
+    b = add(catalog, inbox, "b.txt", "Contrat d'electricite, offre verte.")
+    energie = catalog.ensure_folder(FolderName("Maison", "Energie"), "user", True)
+    contrats = catalog.ensure_folder(FolderName("Santé", "Contrats"), "user", True)
+    catalog.set_classification(
+        Classification(b, energie, "to_confirm", "llm", 0.5, contrats, None), "m")
+    rename_folder(catalog, "Maison/Energie", "Maison/Électricité")
+    c = catalog.classification(b)
+    assert (c.status, c.method, c.alternative_folder_id) == ("to_confirm", "llm", contrats)
+    rename_folder(catalog, "Maison/Électricité", "Maison/Factures")  # merge
+    c = catalog.classification(b)
+    assert (c.status, c.method, c.alternative_folder_id) == ("to_confirm", "llm", contrats)
+    assert str(catalog.folder(c.folder_id).name) == "Maison/Factures"

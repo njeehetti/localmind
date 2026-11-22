@@ -80,5 +80,9 @@ def rename_folder(catalog: Catalog, old: str, new: str) -> None:
         final_id, final_name = target.id, target.name
     catalog.rename_folder_decisions(source.name, final_name)
     for doc in catalog.documents_in(final_id):
-        _decide(catalog, doc.id, final_id)
+        c = catalog.classification(doc.id)
+        # Open hesitations stay open: the user answered about the folder's
+        # name, not about these documents.
+        if c is not None and (c.status == "placed" or c.alternative_folder_id is None):
+            _decide(catalog, doc.id, final_id)
     catalog.delete_empty_llm_folders()

@@ -167,7 +167,12 @@ def review(catalog: Catalog, waiting: list[Classification]) -> None:
         print(_name(catalog, c.document_id))
         if not ask:
             continue
-        options = f"  [1] {a}  [2] {b}  [o] other  [l] later " if b else "  [o] other  [l] later "
+        if b:
+            options = f"  [1] {a}  [2] {b}  [o] other  [l] later "
+        elif c.folder_id:  # its proposal was confirmed meanwhile
+            options = f"  [1] {a}  [o] other  [l] later "
+        else:
+            options = "  [o] other  [l] later "
         choice = _prompt(options)
         if choice is None:
             return

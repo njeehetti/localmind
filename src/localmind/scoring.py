@@ -39,6 +39,7 @@ class Example:
     folder_id: int
     vector: Sequence[float]
     weight: int = 1
+    document_id: int | None = None  # which document this example is (not used in scores)
 
 
 def normalize(vec: Iterable[float]) -> list[float]:

@@ -27,7 +27,7 @@ from typing import Literal
 from localmind.catalog import Catalog, Classification, DocumentToClassify
 from localmind.folders import FolderName, InvalidFolderName, fold, parse_folder
 from localmind.ollama import Classifier, ClassifierUnavailable
-from localmind.scoring import ClassifyConfig, cosine, decide, folder_scores
+from localmind.scoring import ClassifyConfig, Example, cosine, decide, folder_scores
 
 LLM_INVALID = "llm_invalid"
 UNAVAILABLE = "classifier_unavailable"
@@ -139,6 +139,20 @@ class _Run:
         self.used_llm = False
         self._examples_ready = False
         self._names: dict[str, list[float]] = {}  # folder-name vectors, this run
+        # Loaded once per run, then kept up to date: never re-read per document.
+        self._examples: dict[int, Example] | None = None
+        self._user_examples: list[tuple[str, FolderName, list[float]]] | None = None
+
+    def _all_examples(self) -> dict[int, Example]:
+        if self._examples is None:
+            loaded = self.catalog.examples(self.model, self.config.user_weight)
+            self._examples = {e.document_id: e for e in loaded if e.document_id is not None}
+        return self._examples
+
+    def _forget_examples(self) -> None:
+        """A user decision may confirm a folder: reload the examples next time."""
+        self._examples = None
+        self._user_examples = None
 
     def prepare(self, docs: list[DocumentToClassify]) -> None:
         """Embed everything first, in batches: Ollama then never has to switch
@@ -161,7 +175,7 @@ class _Run:
             return decided
         self._embed_missing_examples()
         vector = self._embed(doc)
-        examples = self.catalog.examples(self.model, self.config.user_weight, exclude=doc.id)
+        examples = [e for i, e in self._all_examples().items() if i != doc.id]
         scores = folder_scores(vector, examples, self.config.top_k)
         verdict, ranked = decide(scores, self.config)
         if verdict == "clear":
@@ -181,6 +195,7 @@ class _Run:
                     self.catalog.rekey_folder_decision(matched_hash, file_hash, path)
                     break
         folder_id = self.catalog.ensure_folder(name, "user", True)
+        self._forget_examples()
         return self._store(doc, folder_id, "user", None)
 
     def _embed(self, doc: DocumentToClassify) -> list[float]:
@@ -230,8 +245,11 @@ class _Run:
         alternative_id = None
         if parsed.alternative is not None:
             alt_name, _ = self._resolve(parsed.alternative)
-            if fold(str(alt_name)) != fold(str(folder_name)):
-                alternative_id = self.catalog.ensure_folder(alt_name, "llm", False)
+            existing = self.catalog.folder_by_name(alt_name)
+            # Only an existing folder can be an alternative: one document never
+            # creates a second folder (spec 5.5), and absurd guesses stay out.
+            if existing is not None and existing.id != folder_id:
+                alternative_id = existing.id
         if alternative_id is None and ranked and ranked[0] != folder_id:
             alternative_id = ranked[0]  # the two judges disagree
         hesitation = alternative_id is not None and self.catalog.folder(folder_id).confirmed
@@ -244,10 +262,12 @@ class _Run:
         candidates = []
         for folder_id in ranked[: self.config.candidates]:
             folder = self.catalog.folder(folder_id)
-            names = [d.name for d in self.catalog.documents_in(folder_id)[:2]]
+            names = self.catalog.file_names_in(folder_id, 2)
             candidates.append({"folder": str(folder.name), "examples": names})
+        if self._user_examples is None:
+            self._user_examples = self.catalog.user_examples(self.model)
         nearest = sorted(
-            self.catalog.user_examples(self.model), key=lambda ex: cosine(vector, ex[2]), reverse=True
+            self._user_examples, key=lambda ex: cosine(vector, ex[2]), reverse=True
         )[: self.config.examples]
         payload = {
             "file": doc.name,
@@ -313,11 +333,28 @@ class _Run:
             Classification(doc.id, folder_id, status, method, score, alternative_id, None),
             self.classifier.name,
         )
+        self._remember(doc.id, folder_id, status, confirmed, method)
         alternative = str(self.catalog.folder(alternative_id).name) if alternative_id else None
         return DocClassification(
             doc.id, doc.name, str(folder.name), status, method,
             alternative=alternative, proposed_name=proposed, new_folder=not confirmed,
         )
+
+
+    def _remember(
+        self, doc_id: int, folder_id: int, status: str, confirmed: bool, method: str
+    ) -> None:
+        """Keep the run's examples in step with what was just stored (same rule
+        as ``Catalog.examples``)."""
+        if self._examples is None:
+            return
+        vector = self.catalog.embedding(doc_id, self.model)
+        counts = (status == "placed" and confirmed) or (status == "to_confirm" and not confirmed)
+        if counts and vector is not None:
+            weight = self.config.user_weight if method == "user" else 1
+            self._examples[doc_id] = Example(folder_id, vector, weight, doc_id)
+        else:
+            self._examples.pop(doc_id, None)
 
 
 def _parse(answer: dict) -> _Answer:

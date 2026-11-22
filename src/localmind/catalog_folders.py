@@ -59,11 +59,12 @@ CREATE TABLE IF NOT EXISTS embeddings (
     PRIMARY KEY (document_id, model)
 );
 CREATE TABLE IF NOT EXISTS folder_decisions (
-    file_hash   TEXT PRIMARY KEY,
+    file_hash   TEXT NOT NULL,
     path        TEXT NOT NULL,
     domain      TEXT NOT NULL,
     type        TEXT NOT NULL,
-    decided_at  TEXT NOT NULL
+    decided_at  TEXT NOT NULL,
+    PRIMARY KEY (file_hash, path)  -- one row per copy: each copy's path is kept
 );
 CREATE INDEX IF NOT EXISTS idx_folder_decisions_path ON folder_decisions(path);
 CREATE INDEX IF NOT EXISTS idx_classifications_folder ON classifications(folder_id);
@@ -133,7 +134,15 @@ class FolderStore:
         return [Folder(r[0], FolderName(r[1], r[2]), r[3], bool(r[4]), r[5]) for r in rows]
 
     def folder(self, folder_id: int) -> Folder:
-        return next(f for f in self.folders() if f.id == folder_id)
+        row = self._conn.execute(
+            """SELECT f.id, f.domain, f.type, f.created_by, f.confirmed,
+                      (SELECT COUNT(*) FROM classifications c WHERE c.folder_id = f.id)
+               FROM folders f WHERE f.id = ?""",
+            (folder_id,),
+        ).fetchone()
+        if row is None:
+            raise LookupError(f"no folder with id {folder_id}")
+        return Folder(row[0], FolderName(row[1], row[2]), row[3], bool(row[4]), row[5])
 
     def folder_by_name(self, name: FolderName) -> Folder | None:
         row = self._conn.execute("SELECT id FROM folders WHERE key = ?", (_key(name),)).fetchone()
@@ -254,6 +263,22 @@ class FolderStore:
         docs = [self._document_to_classify(i) for i in ids]
         return [d for d in docs if d.paths and _under(d.paths, under)]
 
+    def file_name(self, document_id: int) -> str:
+        """Name of the document's first indexed file (no text loaded)."""
+        row = self._conn.execute(
+            """SELECT path FROM files WHERE document_id = ? AND status = 'indexed'
+               ORDER BY id LIMIT 1""",
+            (document_id,),
+        ).fetchone()
+        return Path(row[0]).name if row else ""
+
+    def file_names_in(self, folder_id: int, limit: int) -> list[str]:
+        ids = self._conn.execute(
+            "SELECT document_id FROM classifications WHERE folder_id = ? ORDER BY document_id LIMIT ?",
+            (folder_id, limit),
+        ).fetchall()
+        return [self.file_name(r[0]) for r in ids]
+
     def documents_in(self, folder_id: int) -> list[DocumentToClassify]:
         ids = [
             r[0]
@@ -320,7 +345,7 @@ class FolderStore:
         waiting in a proposed (unconfirmed) one. Hesitations do not count.
         ``exclude``: the document being re-classified never matches itself."""
         rows = self._conn.execute(
-            """SELECT c.folder_id, c.method, e.vector FROM classifications c
+            """SELECT c.folder_id, c.method, e.vector, c.document_id FROM classifications c
                JOIN folders f ON f.id = c.folder_id
                JOIN embeddings e ON e.document_id = c.document_id AND e.model = ?
                WHERE ((c.status = 'placed' AND f.confirmed = 1)
@@ -329,8 +354,8 @@ class FolderStore:
             (model, exclude),
         ).fetchall()
         return [
-            Example(folder_id, from_bytes(vec), user_weight if method == "user" else 1)
-            for folder_id, method, vec in rows
+            Example(folder_id, from_bytes(vec), user_weight if method == "user" else 1, doc_id)
+            for folder_id, method, vec, doc_id in rows
         ]
 
     def documents_missing_embedding(self, model: str) -> list[DocumentToClassify]:
@@ -358,7 +383,7 @@ class FolderStore:
             (model,),
         ).fetchall()
         return [
-            (self._document_to_classify(doc_id).name, FolderName(d, t), from_bytes(v))
+            (self.file_name(doc_id), FolderName(d, t), from_bytes(v))
             for doc_id, d, t, v in rows
         ]
 
@@ -368,7 +393,7 @@ class FolderStore:
             self._conn.execute(
                 """INSERT INTO folder_decisions (file_hash, path, domain, type, decided_at)
                    VALUES (?, ?, ?, ?, ?)
-                   ON CONFLICT(file_hash) DO UPDATE SET path = excluded.path,
+                   ON CONFLICT(file_hash, path) DO UPDATE SET
                        domain = excluded.domain, type = excluded.type,
                        decided_at = excluded.decided_at""",
                 (file_hash, str(path), name.domain, name.type, _now()),
@@ -397,8 +422,9 @@ class FolderStore:
         The old row stays: an exact copy of the old version keeps its folder."""
         with self._conn:
             row = self._conn.execute(
-                "SELECT domain, type, decided_at FROM folder_decisions WHERE file_hash = ?",
-                (old_hash,),
+                """SELECT domain, type, decided_at FROM folder_decisions WHERE file_hash = ?
+                   ORDER BY path = ? DESC, decided_at DESC LIMIT 1""",
+                (old_hash, str(path)),
             ).fetchone()
             if row is None or old_hash == new_hash:
                 return

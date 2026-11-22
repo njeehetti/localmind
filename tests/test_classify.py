@@ -109,6 +109,7 @@ def test_llm_disagreeing_is_a_hesitation(catalog, inbox):
 
 def test_llm_alternative_is_a_hesitation(catalog, inbox):
     confirmed_with(catalog, inbox, FACTURES, 1)
+    catalog.ensure_folder(FolderName("Maison", "Contrats"), "user", True)
     add(catalog, inbox, "new.txt", invoice(7))
     [result] = classify(
         catalog, FakeClassifier([answer("Maison/Factures", alternative="Maison/Contrats")])
@@ -248,3 +249,38 @@ def test_documents_are_embedded_in_one_batch_and_names_once(catalog, inbox):
     classify(catalog, fake)
     assert len(fake.embed_batches[0]) == 6  # every document before any LLM call
     assert len(fake.embedded) == len(set(fake.embedded))  # no text embedded twice
+
+
+def test_new_alternative_creates_no_folder(catalog, inbox):
+    confirmed_with(catalog, inbox, FACTURES, 1)
+    add(catalog, inbox, "new.txt", invoice(7))
+    fake = FakeClassifier([answer("Maison/Factures", alternative="Maison/Énergie")])
+    [result] = classify(catalog, fake).results
+    assert (result.status, result.alternative) == ("placed", None)
+    assert [str(f.name) for f in catalog.folders()] == ["Maison/Factures"]
+
+
+def test_run_loads_examples_once_and_reads_each_text_once(catalog, inbox, monkeypatch):
+    from localmind.folder_actions import move
+
+    confirmed_with(catalog, inbox, FACTURES, 3)
+    move(catalog, inbox / "seed_Factures_0.txt", "Maison/Factures")
+    for i in range(4):
+        add(catalog, inbox, f"note_{i}.txt", f"Note personnelle numero {i} sur le sujet {i * 7}.")
+    calls = {"examples": 0, "masked": 0}
+    examples, masked = catalog.examples, catalog._masked_text
+
+    def count_examples(*a, **k):
+        calls["examples"] += 1
+        return examples(*a, **k)
+
+    def count_masked(*a, **k):
+        calls["masked"] += 1
+        return masked(*a, **k)
+
+    monkeypatch.setattr(catalog, "examples", count_examples)
+    monkeypatch.setattr(catalog, "_masked_text", count_masked)
+    fake = FakeClassifier(lambda p: answer("Divers/Notes", new_folder=True))
+    classify(catalog, fake)
+    assert len(fake.chats) >= 2  # prompts with candidates and user examples were built
+    assert calls == {"examples": 1, "masked": 4}
