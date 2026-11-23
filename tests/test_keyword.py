@@ -44,3 +44,10 @@ def test_fuse_ties_without_vector_rank_prefer_smaller_id():
 def test_fuse_keeps_one_sided_hits():
     assert set(fuse([1], [2])) == {1, 2}
     assert fuse([], []) == []
+
+
+def test_decomposed_accents_are_recomposed():
+    import unicodedata
+
+    nfd = unicodedata.normalize("NFD", "électricité")  # macOS paste, some speech-to-text
+    assert keyword_query(nfd) == keyword_query("électricité") == '"électricité"'

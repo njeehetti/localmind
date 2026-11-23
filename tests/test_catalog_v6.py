@@ -135,3 +135,23 @@ def test_fts_syntax_in_questions_never_raises(catalog, tmp_path):  # Review Focu
         if match:
             catalog.keyword_rows(match, 10)
     assert catalog.keyword_rows(keyword_query("l'électricité"), 10) == _ids(catalog, ids["a.txt"])
+
+
+def test_crash_between_table_creation_and_version_bump_still_rebuilds(tmp_path):
+    # executescript(_SCHEMA) commits chunks_fts on its own: a crash (or a locked
+    # catalog) before the rebuild must not leave the old chunks unsearchable
+    from localmind.catalog_chunks import CHUNKS_SCHEMA
+
+    db = tmp_path / "c.db"
+    with Catalog(db) as cat:
+        ids = add_files(cat, tmp_path / "in", {"a.txt": "Facture EDF de mars"})
+        _store(cat, ids["a.txt"], ["girafe"])
+    con = sqlite3.connect(db)
+    con.executescript(
+        "DROP TRIGGER chunks_ai; DROP TRIGGER chunks_ad; DROP TRIGGER chunks_au;"
+        "DROP TABLE chunks_fts; PRAGMA user_version = 5;"
+    )
+    con.executescript(CHUNKS_SCHEMA)  # the new tables exist, the rebuild never ran
+    con.close()
+    with Catalog(db) as cat:
+        assert cat.keyword_rows('"girafe"', 10) == _ids(cat, ids["a.txt"])

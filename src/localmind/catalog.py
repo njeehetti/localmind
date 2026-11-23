@@ -231,17 +231,12 @@ class Catalog(FolderStore, ChunkStore):
         self._conn = sqlite3.connect(db_path)
         self._conn.execute("PRAGMA foreign_keys = ON")
         self.rebuilt_from_v1 = self._migrate()
-        had_keywords = self._has_table("chunks_fts")
-        self._conn.executescript(_SCHEMA)
-        with self._conn:
-            if not had_keywords:  # v5 -> v6: index the chunks already there
+        older = self._conn.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION
+        self._conn.executescript(_SCHEMA)  # commits on its own: the rebuild below must
+        with self._conn:  # not depend on whether chunks_fts existed before it
+            if older:  # v5 -> v6: index the chunks already there ('rebuild' is idempotent)
                 self._conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')")
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-
-    def _has_table(self, name: str) -> bool:
-        return bool(self._conn.execute(
-            "SELECT COUNT(*) FROM sqlite_master WHERE name = ?", (name,)
-        ).fetchone()[0])
 
     def _migrate(self) -> bool:
         """Bring an older catalog to the current schema. Returns True if it was

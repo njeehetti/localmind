@@ -14,6 +14,7 @@ put on the same scale.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Sequence
 
 # Tuned in the stage 5 spike: grammar words and question words that every
@@ -30,7 +31,8 @@ _WORD = re.compile(r"[^\W_]+")  # letters and digits, like the FTS5 unicode61 to
 def keyword_query(question: str) -> str | None:
     """``'"préavis" OR "bail"'`` for "Quel est le préavis de mon bail ?";
     None when no word is left."""
-    words = [w for w in _WORD.findall(question.lower()) if w not in STOP_WORDS]
+    text = unicodedata.normalize("NFC", question).lower()  # "e" + accent -> "é", as indexed
+    words = [w for w in _WORD.findall(text) if w not in STOP_WORDS]
     return " OR ".join(f'"{w}"' for w in words) or None
 
 
