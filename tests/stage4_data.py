@@ -18,13 +18,14 @@ def long_text(word: str, paragraphs: int) -> str:
     )
 
 
-def add_files(catalog: Catalog, folder: Path, files: dict[str, str]) -> dict[str, int]:
+def add_files(catalog: Catalog, folder: Path, files: dict[str, str]) -> dict[str, int | None]:
     """Write the files, ingest them, return name -> document id."""
     folder.mkdir(exist_ok=True)
     for name, text in files.items():
         (folder / name).write_text(text, encoding="utf-8")
     ingest(folder, catalog)
-    return {name: catalog.document_for_path((folder / name).resolve()).id for name in files}
+    docs = {name: catalog.document_for_path((folder / name).resolve()) for name in files}
+    return {name: doc.id if doc else None for name, doc in docs.items()}  # None: quarantined
 
 
 def count(catalog: Catalog, sql: str, *args) -> int:

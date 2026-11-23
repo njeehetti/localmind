@@ -139,3 +139,25 @@ class ChunkStore:
             ):
                 paths[doc_id].append(Path(path))
         return {r[0]: ChunkRow(r[0], r[1], r[2], r[3], tuple(paths[r[1]])) for r in rows}
+
+    # -- forgetting files deleted from disk (prune) -------------------------
+    def file_paths(self) -> list[Path]:
+        """Every file the catalog knows, whatever its status."""
+        rows = self._conn.execute("SELECT path FROM files ORDER BY path")  # type: ignore[attr-defined]
+        return [Path(r[0]) for r in rows]
+
+    def forget_files(self, paths: Sequence[Path]) -> int:
+        """Delete these files' rows, then the documents no file points to any more
+        (their pages, chunks, vectors and classification go with them).
+        Returns the number of documents forgotten. ``decisions``, ``ocr_cache``
+        and ``folder_decisions`` stay: they are keyed by content, and a file put
+        back later finds them again."""
+        with self._conn:  # type: ignore[attr-defined]
+            self._conn.executemany(  # type: ignore[attr-defined]
+                "DELETE FROM files WHERE path = ?", [(str(p),) for p in paths]
+            )
+            cursor = self._conn.execute(  # type: ignore[attr-defined]
+                """DELETE FROM documents WHERE id NOT IN
+                   (SELECT document_id FROM files WHERE document_id IS NOT NULL)"""
+            )
+            return cursor.rowcount
