@@ -67,15 +67,17 @@ def test_bad_question_or_k_is_rejected(indexed, fake, question, k):
 
 
 def test_unavailable_ollama_points_at_search(indexed):
+    # stage 5: search falls back to keywords (test_hybrid_search); warm() still raises
     with pytest.raises(ClassifierUnavailable) as err:
-        search(indexed, "bail", embedder=FakeClassifier(unavailable=True))
+        VectorIndex(indexed, FakeClassifier(unavailable=True)).warm()
     assert err.value.hint.endswith("then: localmind search")
 
 
 def test_only_vectors_of_the_current_model_are_searched(indexed, fake):
     other = FakeClassifier()
     other.embed_model = "other-embed"
-    assert search(indexed, "bail", embedder=other) == []
+    hits = search(indexed, "bail", embedder=other)  # stage 5: keywords still find it
+    assert [h.path.name for h in hits] == ["bail.txt"] and hits[0].score is None
 
 
 def test_deleted_file_is_skipped_and_copy_is_named(indexed, inbox, fake):

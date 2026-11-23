@@ -18,7 +18,7 @@ on your machine: no cloud, no API key, your files never leave your disk.
 | 2b | [OCR](docs/02b-ocr.md) | Neural OCR (docTR, PyTorch, GPU) for scans and photos, confidence, caching | ✅ |
 | 3 | [Classification](docs/03-classification.md) | Embeddings, cosine similarity, a local LLM as second judge, virtual folders | ✅ |
 | 4 | [Chunking & vector search](docs/04-chunking-vectors.md) | Chunks, overlap, asymmetric prefixes, a hand-made vector store (SQLite + numpy) | ✅ |
-| 5 | Retrieval | Vector search, BM25, hybrid search | ⏳ |
+| 5 | [Hybrid search](docs/05-hybrid-search.md) | BM25 with SQLite FTS5, reciprocal rank fusion, folder filter, keyword fallback | ✅ |
 | 6 | Generation | Grounded answers with citations (Ollama) | ⏳ |
 | 7 | Evaluation | Measuring whether answers are right | ⏳ |
 
@@ -69,13 +69,15 @@ reaches them. Without Ollama, `ingest` still works (`--no-classify` skips the st
 ```bash
 uv run localmind ingest ~/Documents/inbox                 # also cuts documents into chunks and embeds them
 uv run localmind search "quel est le préavis de mon bail ?"
-# 0.71  bail_appartement.txt p.1  "...le délai de préavis est d'un mois..."
+# 0.71  bail_appartement.txt p.1  Maison/Contrats  "...le délai de préavis est d'un mois..."
+uv run localmind search "facture 2026-04-5120" --folder Maison   # only one domain (or Maison/Factures)
 uv run localmind prune                                    # forget files you deleted from disk
 ```
 
-Search returns the passages closest in meaning, with file and page; it never cites a
-deleted file and never shows a masked value. Answers written by a local LLM come in
-stage 6.
+Search combines meaning (vectors) and exact words (BM25), with file, page and folder
+(`(to confirm)` until you review the LLM's choice); it never cites a deleted file and
+never shows a masked value. Without Ollama it falls back to keywords. Answers written by
+a local LLM come in stage 6.
 
 ## Use it as a library
 

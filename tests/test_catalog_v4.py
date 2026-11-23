@@ -52,7 +52,7 @@ def test_v3_catalog_upgrades_to_v4_keeping_everything(tmp_path, inbox):
     con.commit()
     con.close()
     with Catalog(db) as cat:
-        assert cat._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 5
+        assert cat._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 6
         assert cat.document_for_path((inbox / "a.txt").resolve()).text.startswith("Facture")
         assert cat.decision_for("abc") is Decision.ACCEPT
         assert cat.folders() == []

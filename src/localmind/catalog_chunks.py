@@ -1,4 +1,4 @@
-"""Catalog storage for stage 4: chunks and their vectors (schema v5).
+"""Catalog storage for stages 4-5: chunks, their vectors (v5) and keywords (v6).
 
     chunks                                   chunk_vectors
     --------------------------------------   ------------------------------
@@ -10,11 +10,16 @@
 One source of truth: a document that disappears (edited file, pruned file)
 takes its chunks and vectors with it, in the same transaction. Copies of a file
 share one document, so they share chunks: no duplicate hits.
+
+``chunks_fts`` (stage 5) is an FTS5 keyword index over ``chunks.text``. It is
+"external content": the text lives once, in ``chunks``, and triggers keep the
+index in step on every insert, delete (cascades included) and update.
+Accents are ignored ("electricite" finds "électricité").
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,6 +43,20 @@ CREATE TABLE IF NOT EXISTS chunk_vectors (
     PRIMARY KEY (chunk_id, model)
 );
 CREATE INDEX IF NOT EXISTS idx_chunk_vectors_model ON chunk_vectors(model);
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+    text, content='chunks', content_rowid='id',
+    tokenize='unicode61 remove_diacritics 2'
+);
+CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+    INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+    INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+END;
+CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE OF text ON chunks BEGIN
+    INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+    INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+END;
 """
 
 
@@ -114,6 +133,34 @@ class ChunkStore:
         """``(chunk_id, vector bytes)`` of every chunk embedded by ``model``."""
         return self._conn.execute(  # type: ignore[attr-defined]
             "SELECT chunk_id, vector FROM chunk_vectors WHERE model = ? ORDER BY chunk_id", (model,)
+        ).fetchall()
+
+    def keyword_rows(
+        self, match: str, limit: int, document_ids: Collection[int] | None = None
+    ) -> list[int]:
+        """Chunk ids matching the FTS5 query ``match``, best BM25 first, at most
+        ``limit``; only chunks of ``document_ids`` when given (empty: none)."""
+        if document_ids is not None and not document_ids:
+            return []
+        where, args = "chunks_fts MATCH ?", [match]
+        if document_ids is not None:
+            ids = sorted(document_ids)
+            where += f" AND c.document_id IN ({','.join('?' * len(ids))})"
+            args += ids
+        rows = self._conn.execute(  # type: ignore[attr-defined]
+            f"""SELECT c.id FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid
+                WHERE {where} ORDER BY bm25(chunks_fts), c.id LIMIT ?""",
+            [*args, limit],
+        )
+        return [r[0] for r in rows]
+
+    def vector_rows(self, model: str) -> list[tuple[int, int, bytes]]:
+        """``(chunk_id, document_id, vector bytes)`` of every chunk embedded by
+        ``model``, read in one query (a folder filter needs the document)."""
+        return self._conn.execute(  # type: ignore[attr-defined]
+            """SELECT v.chunk_id, c.document_id, v.vector FROM chunk_vectors v
+               JOIN chunks c ON c.id = v.chunk_id WHERE v.model = ? ORDER BY v.chunk_id""",
+            (model,),
         ).fetchall()
 
     def vector_marker(self) -> tuple[int, int]:

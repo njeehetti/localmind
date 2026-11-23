@@ -128,12 +128,71 @@ def test_search_with_nothing_indexed(env, capsys):
     assert capsys.readouterr().out == "Nothing indexed yet: localmind index\n"
 
 
-def test_search_with_ollama_down_exits_2(env, inbox, capsys):
+def test_ollama_down_prints_warning_once_and_keyword_hits(env, inbox, capsys):
+    # stage 5 replaces stage 4's "exit 2": keywords still answer
     run(env, "ingest", str(inbox), "--no-classify")
     env["embedder"] = FakeClassifier(unavailable=True)
     capsys.readouterr()
-    assert run(env, "search", "bail") == 2
-    assert capsys.readouterr().err.strip().endswith("then: localmind search")
+    assert run(env, "search", "bail de location") == 0
+    out, err = capsys.readouterr()
+    assert err == (
+        "meaning search unavailable (Ollama not reachable at http://fake: start it "
+        "(ollama serve)): keyword results only\n"
+    )
+    assert out == '  --  bail.txt p.1  "Le bail de location est consenti pour trois ans."\n'
+
+
+def _classified(env, inbox, capsys):
+    """Ingest with the scripted LLM: every document goes to Divers/Autres, to confirm."""
+    (inbox / "lettre.txt").write_text("Une lettre de location sans rapport.", encoding="utf-8")
+    run(env, "ingest", str(inbox))
+    capsys.readouterr()
+
+
+def test_search_prints_folder_and_mark(env, inbox, capsys):
+    _classified(env, inbox, capsys)
+    assert run(env, "search", "bail de location", "-k", "1") == 0
+    assert capsys.readouterr().out == (
+        '1.00  bail.txt p.1  Divers/Autres (to confirm)  "Le bail de location est consenti pour trois ans."\n'
+    )
+
+
+def test_unclassified_hit_has_no_folder_column(env, inbox, capsys):
+    run(env, "ingest", str(inbox), "--no-classify")
+    capsys.readouterr()
+    run(env, "search", "bail", "-k", "1")
+    assert capsys.readouterr().out == '1.00  bail.txt p.1  "Le bail de location est consenti pour trois ans."\n'
+
+
+def test_folder_option_limits_results(env, inbox, capsys):
+    run(env, "ingest", str(inbox), "--no-classify")
+    with Catalog(Path(env["db"])) as catalog:
+        from localmind.catalog import Classification
+        from localmind.folders import FolderName
+
+        doc = catalog.document_for_path((inbox / "abonnement_tel.txt").resolve())
+        folder_id = catalog.ensure_folder(FolderName("Maison", "Abonnements"), "user", True)
+        catalog.set_classification(Classification(doc.id, folder_id, "placed", "user", 1.0, None, None), "m")
+    capsys.readouterr()
+    assert run(env, "search", "bail", "--folder", "maison / abonnements") == 0
+    out = capsys.readouterr().out
+    assert out.splitlines() == [
+        '0.00  abonnement_tel.txt p.1  Maison/Abonnements  '
+        '"Abonnement telephone mobile : prélèvement le 5 de chaque mois."'
+    ]
+
+
+def test_unknown_folder_exits_2(env, inbox, capsys):
+    _classified(env, inbox, capsys)
+    assert run(env, "search", "bail", "--folder", "maison/factur") == 2
+    out, err = capsys.readouterr()
+    assert out == "" and err == "error: no folder named 'Maison/Factur'\n"
+
+
+def test_invalid_folder_exits_2(env, inbox, capsys):
+    _classified(env, inbox, capsys)
+    assert run(env, "search", "bail", "--folder", "a/b/c") == 2
+    assert capsys.readouterr().err.startswith("error: invalid folder name")
 
 
 def test_search_busy_catalog_exits_2(env, inbox, capsys, monkeypatch):
@@ -143,7 +202,7 @@ def test_search_busy_catalog_exits_2(env, inbox, capsys, monkeypatch):
     def locked(*args, **kwargs):
         raise sqlite3.OperationalError("database is locked")
 
-    monkeypatch.setattr(cli_search, "search", locked)
+    monkeypatch.setattr(cli_search.VectorIndex, "search", locked)
     assert run(env, "search", "bail") == 2
     assert capsys.readouterr().err == "error: the catalog is busy, try again\n"
 
@@ -193,8 +252,8 @@ def test_stats_shows_chunks_and_indexed_docs(env, inbox, capsys):
     assert "chunks:          2\n" in out and "indexed docs:    2\n" in out
 
 
-def test_public_api_exports_stage4_names():
+def test_public_api_exports_stage4_and_stage5_names():
     for name in ("index", "IndexReport", "search", "Hit", "VectorIndex", "CatalogBusy",
-                 "prune", "missing_files", "ChunkConfig"):
+                 "prune", "missing_files", "ChunkConfig", "DocFolder", "FolderFilter", "UnknownFolder"):
         assert name in localmind.__all__ and hasattr(localmind, name)
-    assert localmind.__version__ == "0.3.0"
+    assert localmind.__version__ == "0.4.0"
