@@ -48,6 +48,7 @@ class ChunkRow:
     page_no: int
     text: str
     paths: tuple[Path, ...]  # the document's indexed files, oldest first
+    sizes: tuple[int, ...] = ()  # their sizes when last ingested (same order)
 
 
 def _under(path: str, under: Path | None) -> bool:
@@ -130,15 +131,21 @@ class ChunkStore:
             f"SELECT id, document_id, page_no, text FROM chunks WHERE id IN ({marks})", list(chunk_ids)
         ).fetchall()
         doc_ids = sorted({r[1] for r in rows})
-        paths: dict[int, list[Path]] = {d: [] for d in doc_ids}
+        files: dict[int, list[tuple[Path, int]]] = {d: [] for d in doc_ids}
         if doc_ids:
-            for doc_id, path in self._conn.execute(  # type: ignore[attr-defined]
-                f"""SELECT document_id, path FROM files WHERE status = 'indexed'
+            for doc_id, path, size in self._conn.execute(  # type: ignore[attr-defined]
+                f"""SELECT document_id, path, size_bytes FROM files WHERE status = 'indexed'
                     AND document_id IN ({",".join("?" * len(doc_ids))}) ORDER BY id""",
                 doc_ids,
             ):
-                paths[doc_id].append(Path(path))
-        return {r[0]: ChunkRow(r[0], r[1], r[2], r[3], tuple(paths[r[1]])) for r in rows}
+                files[doc_id].append((Path(path), size))
+        return {
+            r[0]: ChunkRow(
+                r[0], r[1], r[2], r[3],
+                tuple(p for p, _ in files[r[1]]), tuple(s for _, s in files[r[1]]),
+            )
+            for r in rows
+        }
 
     # -- forgetting files deleted from disk (prune) -------------------------
     def file_paths(self) -> list[Path]:

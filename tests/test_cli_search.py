@@ -74,7 +74,7 @@ def test_ingest_with_ollama_down_prints_one_hint(env, inbox, capsys):
     assert out.count("Ollama not reachable") == 1
     assert (
         "Ollama not reachable at http://fake: start it (ollama serve), "
-        "then: localmind classify && localmind index"
+        "then: localmind classify; localmind index"
     ) in out
 
 

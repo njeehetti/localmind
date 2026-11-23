@@ -119,3 +119,9 @@ def test_warm_embeds_once_with_keep_alive(indexed, fake):
     VectorIndex(indexed, fake).warm()
     assert len(fake.embed_batches) == calls + 1
     assert fake.prefixes[-1] == "search_query: " and fake.keep_alives[-1] == "30m"
+
+
+def test_file_edited_but_not_reingested_is_not_quoted(indexed, inbox, fake):
+    (inbox / "bail.txt").write_text("Nouveau bail : préavis de trois mois désormais.", encoding="utf-8")
+    hits = search(indexed, "bail", k=5, embedder=fake)
+    assert all(h.path.name != "bail.txt" for h in hits)  # its stored text is outdated

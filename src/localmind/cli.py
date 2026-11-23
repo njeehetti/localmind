@@ -167,7 +167,7 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
         _offer_ocr(catalog, resolved, args)
         reachable = True
         if not args.no_classify:
-            then = "localmind classify" if args.no_index else "localmind classify && localmind index"
+            then = "localmind classify" if args.no_index else "localmind classify; localmind index"
             reachable = cli_folders.classify_and_review(catalog, resolved, then=then)
         if not args.no_index and reachable:  # Ollama down: the hint above said it all
             cli_search.index_after_ingest(catalog)

@@ -9,7 +9,8 @@ second store has to be kept in sync with the catalog.
 
 The matrix stays in memory between questions (JARVIS asks many in one process)
 and is rebuilt when the catalog changed. A file deleted from disk is never
-cited: an existing copy is named instead, or the chunk is skipped.
+cited, nor a file edited since it was ingested (its stored text is outdated):
+an unchanged copy is named instead, or the chunk is skipped.
 """
 
 from __future__ import annotations
@@ -116,19 +117,32 @@ class VectorIndex:
 
     def _existing_hits(self, order: np.ndarray, scores: np.ndarray, k: int) -> list[Hit]:
         rows = self.catalog.chunk_rows([int(self._ids[i]) for i in order])
-        exists: dict[Path, bool] = {}
+        current: dict[Path, bool] = {}
         hits: list[Hit] = []
         for i in order:
             row = rows.get(int(self._ids[i]))
             if row is None:
                 continue
-            path = next((p for p in row.paths if exists.setdefault(p, p.is_file())), None)
+            path = next(
+                (p for p, size in zip(row.paths, row.sizes) if _unchanged(p, size, current)), None
+            )
             if path is None:
-                continue  # every copy was deleted: never cite it
+                continue  # every copy was deleted or edited since: never cite stale text
             hits.append(Hit(path, row.page_no, float(scores[i]), row.text, row.document_id, row.chunk_id))
             if len(hits) == k:
                 break
         return hits
+
+
+def _unchanged(path: Path, size: int, cache: dict[Path, bool]) -> bool:
+    """The file still exists and still has the size it had when ingested (an
+    edit not yet re-ingested must not be quoted with its old text)."""
+    if path not in cache:
+        try:
+            cache[path] = path.stat().st_size == size
+        except OSError:
+            cache[path] = False
+    return cache[path]
 
 
 def search(

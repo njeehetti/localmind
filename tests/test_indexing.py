@@ -116,3 +116,21 @@ def test_on_document_is_called_per_stored_document(catalog, tmp_path):
     seen = []
     index(catalog, FakeClassifier(), on_document=seen.append)
     assert sorted(seen) == sorted(ids.values())
+
+
+class _BrokenAfterFirstBatch(FakeClassifier):
+    """Ollama answers once, then sends a malformed answer (wrong vector count)."""
+
+    def embed(self, texts, prefix="classification: ", keep_alive=None):
+        if self.embed_batches:
+            raise ValueError("expected 32 embeddings, got 31")
+        return super().embed(texts, prefix, keep_alive)
+
+
+def test_malformed_ollama_answer_stops_the_run_with_a_hint(catalog, tmp_path):
+    add_files(catalog, tmp_path / "in", {f"doc{i}.txt": long_text(f"sujet{i}", 20) for i in (1, 2, 3)})
+    report = index(catalog, _BrokenAfterFirstBatch())  # 20 chunks each: doc1 fits in batch 1
+    assert report.unavailable == (
+        "Ollama gave an unexpected answer (expected 32 embeddings, got 31), then: localmind index"
+    )
+    assert report.documents >= 1  # what was complete is kept

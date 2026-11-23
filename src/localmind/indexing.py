@@ -12,6 +12,7 @@ fully indexed or untouched, and the next run picks up the rest.
 
 from __future__ import annotations
 
+import http.client
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,4 +81,7 @@ def index(
     except ClassifierUnavailable as exc:
         hint = exc.with_command("localmind index").hint
         return IndexReport(stored_docs, stored_chunks, empty, hint)
+    except (ValueError, http.client.HTTPException) as exc:  # wrong count, truncated answer
+        reason = f"Ollama gave an unexpected answer ({exc})"
+        return IndexReport(stored_docs, stored_chunks, empty, f"{reason}, then: localmind index")
     return IndexReport(stored_docs, stored_chunks, empty)

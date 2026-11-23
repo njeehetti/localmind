@@ -84,3 +84,10 @@ def test_password_span_covers_value_only():
 def test_spans_sorted_by_position():
     text = "mdp: x1\nIBAN FR7630006000011234567890189"
     assert kinds(text) == ["password", "iban"]
+
+
+def test_iban_split_across_lines_is_found():
+    # Stage 4 prints chunk excerpts: an IBAN wrapped by a line break must be masked too.
+    text = "Coordonnées : FR76 3000 6000\n0112 3456 7890 189 merci"
+    [span] = find_sensitive(text)
+    assert span.kind == "iban" and text[span.start : span.end] == "FR76 3000 6000\n0112 3456 7890 189"
