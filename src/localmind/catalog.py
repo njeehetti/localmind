@@ -1,4 +1,4 @@
-"""The catalog: a SQLite database of *pointers* to your files (schema v4).
+"""The catalog: a SQLite database of *pointers* to your files (schema v5).
 
     files                       documents                 pages
     -------------------------   -----------------------   -------------------------
@@ -22,7 +22,8 @@
 * Migrations never touch ``decisions``, ``ocr_cache`` or ``folder_decisions``:
   they hold the user's choices and hours of OCR work, which a new ``ingest``
   cannot recreate.
-* Stage 3 (folders, classifications, embeddings) lives in ``catalog_folders``.
+* Stage 3 (folders, classifications, embeddings) lives in ``catalog_folders``,
+  stage 4 (chunks and their vectors) in ``catalog_chunks``.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Literal
 
+from localmind.catalog_chunks import CHUNKS_SCHEMA, ChunkStore
 from localmind.catalog_folders import (
     FOLDERS_SCHEMA,
     Classification,
@@ -46,7 +48,7 @@ from localmind.catalog_folders import (
 from localmind.ocr import OcrPage
 from localmind.quality import PageVerdict, Reason
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _PAGES_COLUMNS = """
     id              INTEGER PRIMARY KEY,
@@ -106,12 +108,12 @@ CREATE TABLE IF NOT EXISTS ocr_cache (
 CREATE INDEX IF NOT EXISTS idx_files_file_hash ON files(file_hash);
 CREATE INDEX IF NOT EXISTS idx_files_document ON files(document_id);
 CREATE INDEX IF NOT EXISTS idx_pages_document ON pages(document_id);
-""".replace("{pages_columns}", _PAGES_COLUMNS) + FOLDERS_SCHEMA
+""".replace("{pages_columns}", _PAGES_COLUMNS) + FOLDERS_SCHEMA + CHUNKS_SCHEMA
 
 # Tables a v1 catalog rebuild may drop. Never "decisions", "ocr_cache" nor
 # "folder_decisions".
 _REBUILT_TABLES = (
-    "classifications", "embeddings", "sensitive_spans", "pages", "files", "documents"
+    "chunk_vectors", "chunks", "classifications", "embeddings", "sensitive_spans", "pages", "files", "documents"
 )
 
 # v2 -> v3 in place. SQLite cannot change a CHECK constraint with ALTER TABLE,
@@ -193,6 +195,8 @@ class Stats:
     sensitive_flags: int
     ocr_pages: int = 0
     blank_pages: int = 0
+    chunks: int = 0
+    indexed_documents: int = 0
 
 
 @dataclass(frozen=True)
@@ -221,7 +225,7 @@ def _file_record(row: tuple) -> FileRecord:
     return FileRecord(Path(path), file_hash, size, FileStatus(status), _reason(reason), document_id)
 
 
-class Catalog(FolderStore):
+class Catalog(FolderStore, ChunkStore):
     def __init__(self, db_path: Path) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(db_path)
@@ -239,7 +243,7 @@ class Catalog(FolderStore):
           ``ingest`` recreates them (originals are untouched). ``decisions`` and
           ``ocr_cache`` are never dropped.
         * v2 (stage 2a) is upgraded in place: nothing is lost.
-        * v3 (stage 2b) -> v4 only adds the stage 3 tables.
+        * v3 (stage 2b) -> v4 -> v5 only add the stage 3 and stage 4 tables.
         """
         version = self._conn.execute("PRAGMA user_version").fetchone()[0]
         has_tables = self._conn.execute(
@@ -247,8 +251,8 @@ class Catalog(FolderStore):
         ).fetchone()[0]
         if version >= SCHEMA_VERSION or not has_tables:
             return False
-        if version == 3:
-            return False  # v3 -> v4 only adds tables: _SCHEMA creates them
+        if version in (3, 4):
+            return False  # v3 -> v4 -> v5 only add tables: _SCHEMA creates them
         if version == 2:
             self._conn.commit()
             self._conn.execute("PRAGMA foreign_keys = OFF")  # no effect inside a transaction
@@ -538,6 +542,8 @@ class Catalog(FolderStore):
             sensitive_flags=len(self.sensitive_flags()),
             ocr_pages=count("SELECT COUNT(*) FROM pages WHERE source = 'ocr' AND status = 'ok'"),
             blank_pages=count("SELECT COUNT(*) FROM pages WHERE status = 'blank'"),
+            chunks=count("SELECT COUNT(*) FROM chunks"),
+            indexed_documents=count("SELECT COUNT(DISTINCT document_id) FROM chunks"),
         )
 
     def duplicate_groups(self) -> list[DuplicateGroup]:

@@ -13,7 +13,7 @@ import json
 
 from localmind.ollama import ClassifierUnavailable
 
-DIM = 64
+DIM = 512  # one axis per distinct text: stage 4 makes many chunks
 KEYWORDS = (
     "facture", "paie", "remboursement", "contrat", "ordonnance", "impot",
     # stage 4 (appended: earlier axes keep their index)

@@ -1,0 +1,141 @@
+"""Catalog storage for stage 4: chunks and their vectors (schema v5).
+
+    chunks                                   chunk_vectors
+    --------------------------------------   ------------------------------
+    document_id --> documents (cascade)      chunk_id --> chunks (cascade)
+    page_no, seq (unique per document)       model
+    text (masked: never a sensitive value)   vector (float32, normalised)
+    chunker (the parameters that cut it)
+
+One source of truth: a document that disappears (edited file, pruned file)
+takes its chunks and vectors with it, in the same transaction. Copies of a file
+share one document, so they share chunks: no duplicate hits.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+from pathlib import Path
+
+from localmind.chunking import Chunk
+from localmind.scoring import to_bytes
+
+CHUNKS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS chunks (
+    id           INTEGER PRIMARY KEY,
+    document_id  INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    page_no      INTEGER NOT NULL,
+    seq          INTEGER NOT NULL,
+    text         TEXT NOT NULL,
+    chunker      TEXT NOT NULL,
+    UNIQUE (document_id, seq)
+);
+CREATE TABLE IF NOT EXISTS chunk_vectors (
+    chunk_id  INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+    model     TEXT NOT NULL,
+    vector    BLOB NOT NULL,
+    PRIMARY KEY (chunk_id, model)
+);
+CREATE INDEX IF NOT EXISTS idx_chunk_vectors_model ON chunk_vectors(model);
+"""
+
+
+@dataclass(frozen=True)
+class ChunkRow:
+    chunk_id: int
+    document_id: int
+    page_no: int
+    text: str
+    paths: tuple[Path, ...]  # the document's indexed files, oldest first
+
+
+def _under(path: str, under: Path | None) -> bool:
+    p = Path(path)
+    return under is None or p == under or under in p.parents
+
+
+class ChunkStore:
+    """Mixin for ``Catalog`` (needs ``self._conn`` and ``self._masked_pages``)."""
+
+    def masked_pages(self, document_id: int) -> list[tuple[int, str]]:
+        """``(page_no, text)`` of the document's usable pages, sensitive spans masked."""
+        return self._masked_pages(document_id)  # type: ignore[attr-defined]
+
+    def documents_to_index(
+        self, chunker: str, model: str, under: Path | None = None, redo: bool = False
+    ) -> list[int]:
+        """Documents with usable text whose chunks are missing, were cut with
+        other parameters, or lack a vector from ``model`` (all of them if ``redo``)."""
+        stale = "1" if redo else """(
+            NOT EXISTS (SELECT 1 FROM chunks c WHERE c.document_id = d.id)
+            OR EXISTS (SELECT 1 FROM chunks c WHERE c.document_id = d.id AND c.chunker != :chunker)
+            OR EXISTS (SELECT 1 FROM chunks c WHERE c.document_id = d.id AND NOT EXISTS (
+                SELECT 1 FROM chunk_vectors v WHERE v.chunk_id = c.id AND v.model = :model)))"""
+        rows = self._conn.execute(  # type: ignore[attr-defined]
+            f"""SELECT d.id, f.path FROM documents d JOIN files f ON f.document_id = d.id
+                WHERE f.status = 'indexed'
+                  AND EXISTS (SELECT 1 FROM pages p WHERE p.document_id = d.id AND p.status = 'ok')
+                  AND {stale}
+                ORDER BY d.id, f.id""",
+            {"chunker": chunker, "model": model},
+        ).fetchall()
+        ids: list[int] = []
+        for doc_id, path in rows:
+            if _under(path, under) and doc_id not in ids:
+                ids.append(doc_id)
+        return ids
+
+    def store_chunks(
+        self,
+        document_id: int,
+        chunker: str,
+        model: str,
+        chunks: Sequence[Chunk],
+        vectors: Sequence[Sequence[float]],
+    ) -> None:
+        """Replace the document's chunks and vectors, all at once or not at all."""
+        if len(chunks) != len(vectors):
+            raise ValueError(f"{len(chunks)} chunks but {len(vectors)} vectors")
+        with self._conn:  # type: ignore[attr-defined]
+            self._conn.execute("DELETE FROM chunks WHERE document_id = ?", (document_id,))  # type: ignore[attr-defined]
+            for chunk, vector in zip(chunks, vectors):
+                cursor = self._conn.execute(  # type: ignore[attr-defined]
+                    "INSERT INTO chunks (document_id, page_no, seq, text, chunker) VALUES (?, ?, ?, ?, ?)",
+                    (document_id, chunk.page_no, chunk.seq, chunk.text, chunker),
+                )
+                self._conn.execute(  # type: ignore[attr-defined]
+                    "INSERT INTO chunk_vectors (chunk_id, model, vector) VALUES (?, ?, ?)",
+                    (cursor.lastrowid, model, to_bytes(vector)),
+                )
+
+    def vector_matrix_rows(self, model: str) -> list[tuple[int, bytes]]:
+        """``(chunk_id, vector bytes)`` of every chunk embedded by ``model``."""
+        return self._conn.execute(  # type: ignore[attr-defined]
+            "SELECT chunk_id, vector FROM chunk_vectors WHERE model = ? ORDER BY chunk_id", (model,)
+        ).fetchall()
+
+    def vector_marker(self) -> tuple[int, int]:
+        """Changes whenever the catalog may have changed: commits by another
+        connection (``data_version``) or by this one (``total_changes``).
+        Row ids are reused after a delete, so counting rows would not do."""
+        version = self._conn.execute("PRAGMA data_version").fetchone()[0]  # type: ignore[attr-defined]
+        return version, self._conn.total_changes  # type: ignore[attr-defined]
+
+    def chunk_rows(self, chunk_ids: Sequence[int]) -> dict[int, ChunkRow]:
+        if not chunk_ids:
+            return {}
+        marks = ",".join("?" * len(chunk_ids))
+        rows = self._conn.execute(  # type: ignore[attr-defined]
+            f"SELECT id, document_id, page_no, text FROM chunks WHERE id IN ({marks})", list(chunk_ids)
+        ).fetchall()
+        doc_ids = sorted({r[1] for r in rows})
+        paths: dict[int, list[Path]] = {d: [] for d in doc_ids}
+        if doc_ids:
+            for doc_id, path in self._conn.execute(  # type: ignore[attr-defined]
+                f"""SELECT document_id, path FROM files WHERE status = 'indexed'
+                    AND document_id IN ({",".join("?" * len(doc_ids))}) ORDER BY id""",
+                doc_ids,
+            ):
+                paths[doc_id].append(Path(path))
+        return {r[0]: ChunkRow(r[0], r[1], r[2], r[3], tuple(paths[r[1]])) for r in rows}
