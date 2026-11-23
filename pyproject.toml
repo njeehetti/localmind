@@ -1,6 +1,6 @@
 [project]
 name = "localmind"
-version = "0.2.0"
+version = "0.3.0"
 description = "A fully local RAG that sorts your documents and answers questions about them, built step by step for learning."
 readme = "README.md"
 license = "MIT"
