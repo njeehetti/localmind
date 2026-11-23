@@ -191,6 +191,26 @@ téléphonique ?") and measure whether the right chunk is in the top 3, for
 chunk sizes 500 / 800 / 1200 and with and without the header. Keep 800 + header
 unless the numbers say otherwise; record the table in the stage doc.
 
+**Results (2026-11-23, nomic-embed-text, 10 generated French documents, 10 questions,
+overlap 15 %, 48 s for the whole spike):**
+
+| chunk size | header | chunks | right chunk in top 3 | rank per question |
+|---|---|---|---|---|
+| 500 | yes | 57 | 10/10 | 2 1 2 1 1 3 1 1 1 1 |
+| 500 | no | 57 | 8/10 | 2 1 4 1 1 16 3 1 1 3 |
+| **800** | **yes** | **37** | **9/10** | 15 1 1 1 1 1 1 1 1 1 |
+| 800 | no | 37 | 8/10 | 21 1 2 1 1 1 7 1 1 1 |
+| 1200 | yes | 24 | 9/10 | 16 1 2 1 1 1 1 1 1 1 |
+| 1200 | no | 24 | 8/10 | 20 1 5 1 1 1 1 1 1 2 |
+
+Decision by the gate: **800 + header kept** (9/10 ≥ 8/10; 500 wins by only 1
+question; the header wins at every size). The header always helps (+1 or +2).
+The one miss at 800 is the user's own question ("quel jour suis-je prélevé pour
+mon abonnement téléphonique ?", rank 15): the debit-day sentence shares its chunk
+with legal boilerplate that dilutes the vector, and "téléphonique" never appears in
+the contract ("mobile", "forfait"). Smaller chunks dilute less; keyword search
+(stage 5) and stage 7's evaluation on real documents will revisit the size.
+
 ### 5.8 Calls made after the builder check (author's calls, open to correction)
 
 - **Which documents the automatic index covers**: every accepted document still
