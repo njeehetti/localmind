@@ -18,7 +18,7 @@ on your machine: no cloud, no API key, your files never leave your disk.
 | 2b | [OCR](docs/02b-ocr.md) | Neural OCR (docTR, PyTorch, GPU) for scans and photos, confidence, caching | ✅ |
 | 3 | [Classification](docs/03-classification.md) | Embeddings, cosine similarity, a local LLM as second judge, virtual folders | ✅ |
 | 4 | [Chunking & vector search](docs/04-chunking-vectors.md) | Chunks, overlap, asymmetric prefixes, a hand-made vector store (SQLite + numpy) | ✅ |
-| 5 | Retrieval | Vector search, BM25, hybrid search | ⏳ |
+| 5 | [Hybrid search](docs/05-hybrid-search.md) | BM25 with SQLite FTS5, reciprocal rank fusion, folder filter, keyword fallback | ✅ |
 | 6 | Generation | Grounded answers with citations (Ollama) | ⏳ |
 | 7 | Evaluation | Measuring whether answers are right | ⏳ |
 
