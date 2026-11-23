@@ -33,3 +33,19 @@ def test_real_llm_answers_the_schema(client):
         schema,
     )
     assert "/" in out["folder"]
+
+
+def test_query_and_document_prefixes_bring_the_answer_closer(client):
+    from localmind.ollama import DOCUMENT_PREFIX, QUERY_PREFIX, SEARCH_KEEP_ALIVE
+
+    (q,) = client.embed(["quel jour suis-je prélevé ?"], prefix=QUERY_PREFIX, keep_alive=SEARCH_KEEP_ALIVE)
+    debit, lease = client.embed(
+        [
+            "Votre abonnement est réglé par prélèvement le 5 de chaque mois.",
+            "Le bail est consenti pour trois ans, loyer mensuel 850 euros.",
+        ],
+        prefix=DOCUMENT_PREFIX,
+        keep_alive=SEARCH_KEEP_ALIVE,
+    )
+    dot = lambda a, b: sum(x * y for x, y in zip(a, b))  # noqa: E731
+    assert dot(q, debit) > dot(q, lease)
