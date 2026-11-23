@@ -154,6 +154,15 @@ class ChunkStore:
         )
         return [r[0] for r in rows]
 
+    def vector_rows(self, model: str) -> list[tuple[int, int, bytes]]:
+        """``(chunk_id, document_id, vector bytes)`` of every chunk embedded by
+        ``model``, read in one query (a folder filter needs the document)."""
+        return self._conn.execute(  # type: ignore[attr-defined]
+            """SELECT v.chunk_id, c.document_id, v.vector FROM chunk_vectors v
+               JOIN chunks c ON c.id = v.chunk_id WHERE v.model = ? ORDER BY v.chunk_id""",
+            (model,),
+        ).fetchall()
+
     def vector_marker(self) -> tuple[int, int]:
         """Changes whenever the catalog may have changed: commits by another
         connection (``data_version``) or by this one (``total_changes``).
