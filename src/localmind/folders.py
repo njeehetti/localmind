@@ -19,6 +19,13 @@ class InvalidFolderName(ValueError):
     """Not a valid ``Domaine/Type`` name."""
 
 
+class UnknownFolder(LookupError):
+    """A folder filter that names no folder of the catalog."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__(f"no folder named '{text}'")
+
+
 @dataclass(frozen=True, order=True)
 class FolderName:
     domain: str
@@ -41,6 +48,26 @@ def parse_folder(text: str) -> FolderName:
     if len(parts) != 2:
         raise InvalidFolderName(f"invalid folder name: {text!r} (expected Domaine/Type)")
     return FolderName(_clean_part(parts[0], text), _clean_part(parts[1], text))
+
+
+@dataclass(frozen=True)
+class FolderFilter:
+    """A whole domain (``Maison``, type None) or one folder (``Maison/Factures``)."""
+
+    domain: str
+    type: str | None = None
+
+    def __str__(self) -> str:
+        return self.domain if self.type is None else f"{self.domain}/{self.type}"
+
+
+def parse_folder_filter(text: str) -> FolderFilter:
+    """``" maison "`` -> ``Maison``; ``"maison / factures"`` -> ``Maison/Factures``."""
+    parts = text.split("/")
+    if len(parts) == 1:
+        return FolderFilter(_clean_part(parts[0], text))
+    folder = parse_folder(text)
+    return FolderFilter(folder.domain, folder.type)
 
 
 def fold(text: str) -> str:

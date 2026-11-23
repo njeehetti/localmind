@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from localmind.folders import FolderName, fold
+from localmind.folders import FolderFilter, FolderName, UnknownFolder, fold
 from localmind.scoring import Example, from_bytes, to_bytes
 
 FOLDERS_SCHEMA = """
@@ -94,6 +94,12 @@ class Classification:
 
 
 @dataclass(frozen=True)
+class DocFolder:
+    name: str  # "Maison/Factures"
+    to_confirm: bool  # placed by the LLM, not reviewed by the user yet
+
+
+@dataclass(frozen=True)
 class DocumentToClassify:
     id: int
     name: str  # file name of its first file
@@ -147,6 +153,29 @@ class FolderStore:
     def folder_by_name(self, name: FolderName) -> Folder | None:
         row = self._conn.execute("SELECT id FROM folders WHERE key = ?", (_key(name),)).fetchone()
         return self.folder(row[0]) if row else None
+
+    def document_folders(self, only: FolderFilter | None = None) -> dict[int, DocFolder]:
+        """Document id -> the folder its classification chose (``folder_id``),
+        reviewed or not: hesitations count for their chosen folder, never for
+        their alternative. Unclassified documents are absent. With ``only``,
+        just the documents of that domain or folder; ``UnknownFolder`` when no
+        folder (confirmed or only proposed by the LLM) has that name."""
+        where, args = "", []
+        if only is not None:
+            if only.type is None:
+                prefix = fold(only.domain) + "/"
+                where, args = "WHERE substr(f.key, 1, ?) = ?", [len(prefix), prefix]
+            else:
+                where, args = "WHERE f.key = ?", [_key(FolderName(only.domain, only.type))]
+            known = self._conn.execute(f"SELECT COUNT(*) FROM folders f {where}", args).fetchone()[0]
+            if not known:
+                raise UnknownFolder(str(only))
+        rows = self._conn.execute(
+            f"""SELECT c.document_id, f.domain, f.type, c.status
+                FROM classifications c JOIN folders f ON f.id = c.folder_id {where}""",
+            args,
+        )
+        return {r[0]: DocFolder(f"{r[1]}/{r[2]}", r[3] == "to_confirm") for r in rows}
 
     def ensure_folder(
         self, name: FolderName, created_by: Literal["user", "llm"], confirmed: bool
