@@ -34,7 +34,7 @@ _BOUNDARIES = (
 
 @dataclass(frozen=True)
 class ChunkConfig:
-    chunk_chars: int = 800  # measured in the stage 4 spike (9/10 right chunks in the top 3)
+    chunk_chars: int = 600  # stage 5 spike: 10/10 right chunks in the top 3 (800 gave 9/10)
     overlap_chars: int = 120  # ~15 %
     min_chars: int = 200
 

@@ -39,7 +39,7 @@ def test_size_and_overlap():
     text = ". ".join(f"Phrase numéro {i} du contrat" for i in range(200))
     chunks = chunk_pages([(1, text)])
     assert len(chunks) > 2
-    assert all(len(c.text) <= 800 + 120 for c in chunks)
+    assert all(len(c.text) <= 600 + 120 for c in chunks)
     assert chunks[1].text[:40] in chunks[0].text  # overlap from the previous chunk
 
 
@@ -63,7 +63,7 @@ def test_blank_page_text_gives_no_chunk():
 
 
 def test_version_names_the_parameters():
-    assert ChunkConfig().version == "para-v1:800/120/200"
+    assert ChunkConfig().version == "para-v1:600/120/200"
 
 
 def test_embed_text_has_file_and_page_header():

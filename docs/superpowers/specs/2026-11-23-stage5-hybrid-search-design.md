@@ -181,6 +181,24 @@ gate fails, come back to the user before building.
 - The stage 4 spike script lived in a scratchpad: the spike data is regenerated from
   the stage 4 plan's description (same 10 documents and questions), scratch data only.
 
+### 5.10 Spike results (2026-11-24)
+
+Stage 4 scratch documents (11 text files), real `nomic-embed-text`, in-memory FTS5;
+right chunk in the top 3 for 10 questions plus 5 exact-word questions:
+
+| chunk size | meaning only | keywords only | hybrid (RRF) | phone question, hybrid rank |
+|---|---|---|---|---|
+| 800 | 9/10 | 9/10 | 9/10 | 6 (gate failed) |
+| **600** | **10/10** | 8/10 | **10/10** | **1** |
+| 500 | 10/10 | 9/10 | 10/10 | 1 |
+
+Exact-word questions: 5/5 for every method (this corpus is too small to separate them).
+Stop words and the constant (60 vs 20) changed little: 60 kept. Cause of the 800 miss:
+the debit day sits in a chunk that is mostly legal boilerplate (meaning rank 18); at 600
+it has its own chunk. **Decision (user, 2026-11-24): chunk size 600** (`para-v1:600/120/200`);
+existing catalogs are re-cut by `localmind index --all`. Caveat: 10 questions, sizes
+chosen on the same questions; stage 7 measures on real documents.
+
 ## 6. Deliverables
 
 - `catalog` schema v6 (FTS table, triggers, migration), keyword query + fusion + folder

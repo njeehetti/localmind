@@ -13,7 +13,7 @@ sorting, useless for finding a sentence on page 3. Stage 4 cuts every document i
 A vector is an average of everything in its text. A whole invoice page (supplier,
 amount, consumption, legal small print) gives a blurred vector; a passage of a few
 hundred characters stays about *one* thing. localmind cuts each page into chunks of
-about **800 characters**:
+about **600 characters** (800 until stage 5, see section 7):
 
 - cuts fall on the most natural boundary that fits: a blank line (a paragraph), then a
   line break (OCR text and tables rarely have blank lines), then the end of a
@@ -23,7 +23,7 @@ about **800 characters**:
 - a tail shorter than 200 characters joins the previous chunk;
 - a chunk **never spans two pages**, so every result can be cited `bail.pdf p.3`.
 
-The parameters are stored with each chunk (`para-v1:800/120/200`): change them and
+The parameters are stored with each chunk (`para-v1:600/120/200`): change them and
 `localmind index --all` cuts everything again.
 
 ## 2. A header, and two kinds of prefix
@@ -121,7 +121,9 @@ letter...), 10 questions, right chunk in the top 3:
 | **800** | **9/10** | 8/10 |
 | 1200 | 9/10 | 8/10 |
 
-The header always helps. 800 was kept (500 wins by only one question). The one miss is
+The header always helps. 800 was kept at first (500 wins by only one question); the
+stage 5 spike moved it to **600** (10/10 meaning-only and hybrid, see
+`05-hybrid-search.md`). The one miss is
 telling: "quel jour suis-je prélevé pour mon abonnement **téléphonique** ?" against a
 contract that says "forfait **mobile**" and buries the debit day among legal small
 print. Meaning-based search does not save every wording; stage 5 adds keyword search
