@@ -7,14 +7,14 @@ import pytest
 from localmind.ollama import OllamaClassifier
 
 try:
-    urllib.request.urlopen("http://localhost:11434/api/version", timeout=1).read()
+    urllib.request.urlopen("http://127.0.0.1:11434/api/version", timeout=1).read()
 except OSError:
     pytest.skip("Ollama is not running", allow_module_level=True)
 
 
 @pytest.fixture(scope="module")
 def client():
-    c = OllamaClassifier(url="http://localhost:11434")
+    c = OllamaClassifier(url="http://127.0.0.1:11434")
     yield c
     c.release()
 

@@ -173,3 +173,10 @@ def test_env_overrides(monkeypatch):
     client = OllamaClassifier()
     assert (client.llm, client.embed_model, client.url) == ("mistral:7b", "bge-m3", "http://host:1234")
     assert client.name == "mistral:7b+bge-m3"
+
+
+def test_default_url_is_ipv4_loopback(monkeypatch):
+    # On Windows, "localhost" tries IPv6 (::1) first; Ollama listens on IPv4
+    # only, and every request paid ~2 s for the fallback (stage 4 end-to-end).
+    monkeypatch.delenv("LOCALMIND_OLLAMA_URL", raising=False)
+    assert OllamaClassifier().url == "http://127.0.0.1:11434"
