@@ -94,8 +94,9 @@ many in one process) and rebuilds it when the catalog changed.
 ## 6. Files you deleted
 
 The catalog keeps a file it cannot find (it may be on an unplugged drive), but search
-never cites one: each result is checked on disk, an existing copy is named instead, or
-the passage is skipped and the next one taken. To forget them for good:
+never cites one, nor a file edited since the last `ingest` (its stored text is outdated):
+each result is checked on disk (exists, same size), an unchanged copy is named instead,
+or the passage is skipped and the next one taken. To forget them for good:
 
 ```
 $ localmind prune
