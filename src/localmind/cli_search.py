@@ -1,4 +1,4 @@
-"""Command-line side of stage 4: indexing after ingest, and the ``index``,
+"""Command-line side of stages 4-5: indexing after ingest, and the ``index``,
 ``search`` and ``prune`` commands. Like the rest of the CLI, it only prints:
 the work is done by ``indexing``, ``search`` and ``prune``.
 """
@@ -14,7 +14,8 @@ from localmind.catalog import Catalog
 from localmind.indexing import IndexReport, index
 from localmind.ollama import Classifier, ClassifierUnavailable, OllamaClassifier
 from localmind.prune import missing_files, prune
-from localmind.search import CatalogBusy, search
+from localmind.folders import UnknownFolder
+from localmind.search import CatalogBusy, Hit, VectorIndex
 
 EXCERPT_CHARS = 100
 _YES = {"y", "yes", "o", "oui"}
@@ -70,11 +71,12 @@ def _cmd_search(args: argparse.Namespace) -> int:
             if catalog.stats().chunks == 0:
                 print("Nothing indexed yet: localmind index")
                 return 0
-            hits = search(catalog, args.question, k=args.k, embedder=make_embedder())
+            finder = VectorIndex(catalog, make_embedder())
+            hits = finder.search(args.question, k=args.k, folder=args.folder)
     except ClassifierUnavailable as exc:
         print(exc.hint, file=sys.stderr)
         return 2
-    except ValueError as exc:
+    except (ValueError, UnknownFolder) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except (CatalogBusy, sqlite3.OperationalError) as exc:
@@ -82,11 +84,23 @@ def _cmd_search(args: argparse.Namespace) -> int:
             raise
         print(f"error: {CatalogBusy()}", file=sys.stderr)
         return 2
+    if finder.last_warning:
+        print(f"meaning search unavailable ({finder.last_warning}): keyword results only", file=sys.stderr)
     if not hits:
         print("No match.")
     for h in hits:
-        print(f'{h.score:.2f}  {h.path.name} p.{h.page_no}  "{_excerpt(h.text)}"')
+        print(hit_line(h))
     return 0
+
+
+def hit_line(h: Hit) -> str:
+    """``0.70  facture.txt p.1  Maison/Factures (to confirm)  "excerpt"``; the
+    score reads ``--`` without a vector, the folder is left out when there is none."""
+    score = "  --" if h.score is None else f"{h.score:.2f}"
+    folder = ""
+    if h.folder is not None:
+        folder = f"{h.folder} (to confirm)  " if h.to_confirm else f"{h.folder}  "
+    return f'{score}  {h.path.name} p.{h.page_no}  {folder}"{_excerpt(h.text)}"'
 
 
 def _cmd_prune(args: argparse.Namespace) -> int:
@@ -120,9 +134,12 @@ def register(sub: argparse._SubParsersAction) -> None:
     p_index.add_argument("--all", action="store_true", help="index everything again")
     p_index.set_defaults(func=_cmd_index)
 
-    p_search = sub.add_parser("search", help="find the passages closest to a question")
+    p_search = sub.add_parser("search", help="find the passages that best answer a question")
     p_search.add_argument("question")
     p_search.add_argument("-k", type=int, default=5, help="number of passages (default 5)")
+    p_search.add_argument(
+        "--folder", help="only documents of this domain or folder (Maison, Maison/Factures)"
+    )
     p_search.set_defaults(func=_cmd_search)
 
     p_prune = sub.add_parser("prune", help="forget files deleted from disk (never touches files)")

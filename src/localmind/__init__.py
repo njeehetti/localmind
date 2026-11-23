@@ -10,10 +10,12 @@ assistant only use these names):
 """
 
 from localmind.catalog import Catalog, Decision, FileStatus
+from localmind.catalog_folders import DocFolder
 from localmind.chunking import ChunkConfig
 from localmind.classify import ClassifyReport, classify
 from localmind.config import default_db_path, sensitive_policy_from_env
 from localmind.folder_actions import choose_folder, confirm, move, rename_folder
+from localmind.folders import FolderFilter, UnknownFolder
 from localmind.indexing import IndexReport, index
 from localmind.ingest import IngestReport, Outcome, apply_decision, ingest, retry, run_ocr
 from localmind.ocr import OcrEngine, OcrPage, load_engine, ocr_available
@@ -27,6 +29,9 @@ __all__ = [
     "Catalog",
     "CatalogBusy",
     "ChunkConfig",
+    "DocFolder",
+    "FolderFilter",
+    "UnknownFolder",
     "Hit",
     "IndexReport",
     "PruneReport",
@@ -61,4 +66,4 @@ __all__ = [
     "run_ocr",
     "sensitive_policy_from_env",
 ]
-__version__ = "0.3.0"
+__version__ = "0.4.0"
