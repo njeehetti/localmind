@@ -69,13 +69,15 @@ reaches them. Without Ollama, `ingest` still works (`--no-classify` skips the st
 ```bash
 uv run localmind ingest ~/Documents/inbox                 # also cuts documents into chunks and embeds them
 uv run localmind search "quel est le préavis de mon bail ?"
-# 0.71  bail_appartement.txt p.1  "...le délai de préavis est d'un mois..."
+# 0.71  bail_appartement.txt p.1  Maison/Contrats  "...le délai de préavis est d'un mois..."
+uv run localmind search "facture 2026-04-5120" --folder Maison   # only one domain (or Maison/Factures)
 uv run localmind prune                                    # forget files you deleted from disk
 ```
 
-Search returns the passages closest in meaning, with file and page; it never cites a
-deleted file and never shows a masked value. Answers written by a local LLM come in
-stage 6.
+Search combines meaning (vectors) and exact words (BM25), with file, page and folder
+(`(to confirm)` until you review the LLM's choice); it never cites a deleted file and
+never shows a masked value. Without Ollama it falls back to keywords. Answers written by
+a local LLM come in stage 6.
 
 ## Use it as a library
 
