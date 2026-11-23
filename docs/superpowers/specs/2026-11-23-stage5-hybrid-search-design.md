@@ -195,7 +195,7 @@ right chunk in the top 3 for 10 questions plus 5 exact-word questions:
 Exact-word questions: 5/5 for every method (this corpus is too small to separate them).
 Stop words and the constant (60 vs 20) changed little: 60 kept. Cause of the 800 miss:
 the debit day sits in a chunk that is mostly legal boilerplate (meaning rank 18); at 600
-it has its own chunk. **Decision (user, 2026-11-24): chunk size 600** (`para-v1:600/120/200`);
+it has its own chunk. **Decision (user, 2026-11-24): chunk size 600** (`para-v1:600/90/150`: overlap and minimum scale with the size, 15 % and a quarter, as in the spike; 600/120/200 was checked end to end and gave the phone question rank 6 again);
 existing catalogs are re-cut by `localmind index --all`. Caveat: 10 questions, sizes
 chosen on the same questions; stage 7 measures on real documents.
 

@@ -18,12 +18,12 @@ about **600 characters** (800 until stage 5, see section 7):
 - cuts fall on the most natural boundary that fits: a blank line (a paragraph), then a
   line break (OCR text and tables rarely have blank lines), then the end of a
   sentence, then a space; **never inside a word**;
-- two consecutive chunks share **120 characters** (overlap), so a sentence cut at the
+- two consecutive chunks share **90 characters** (overlap, 15 %; 120 until stage 5), so a sentence cut at the
   edge of one chunk is whole in the next;
-- a tail shorter than 200 characters joins the previous chunk;
+- a tail shorter than 150 characters (a quarter; 200 until stage 5) joins the previous chunk;
 - a chunk **never spans two pages**, so every result can be cited `bail.pdf p.3`.
 
-The parameters are stored with each chunk (`para-v1:600/120/200`): change them and
+The parameters are stored with each chunk (`para-v1:600/90/150`): change them and
 `localmind index --all` cuts everything again.
 
 ## 2. A header, and two kinds of prefix

@@ -34,9 +34,9 @@ _BOUNDARIES = (
 
 @dataclass(frozen=True)
 class ChunkConfig:
-    chunk_chars: int = 600  # stage 5 spike: 10/10 right chunks in the top 3 (800 gave 9/10)
-    overlap_chars: int = 120  # ~15 %
-    min_chars: int = 200
+    chunk_chars: int = 600  # stage 5 spike: 10/10 right chunks in the top 3 (800/120/200 gave 9/10)
+    overlap_chars: int = 90  # 15 %
+    min_chars: int = 150  # a quarter: 200 glued the phone answer back to legal small print
 
     @property
     def version(self) -> str:
