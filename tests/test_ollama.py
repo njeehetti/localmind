@@ -7,7 +7,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from localmind.ollama import ClassifierUnavailable, OllamaClassifier
+from localmind.ollama import (
+    DOCUMENT_PREFIX,
+    QUERY_PREFIX,
+    SEARCH_KEEP_ALIVE,
+    ClassifierUnavailable,
+    OllamaClassifier,
+)
 
 
 class Stub:
@@ -61,6 +67,32 @@ def test_embed_sends_prefix_and_normalises(stub):
     assert OllamaClassifier(url=stub.url).embed(["x"]) == [pytest.approx([0.6, 0.8])]
     body = stub.last("/api/embed")
     assert body["input"] == ["classification: x"] and body["model"] == "nomic-embed-text"
+
+
+def test_embed_sends_the_given_prefix_and_keep_alive(stub):
+    stub.reply("/api/embed", {"embeddings": [[1.0, 0.0]]})
+    OllamaClassifier(url=stub.url).embed(["Total 84 €"], prefix=DOCUMENT_PREFIX, keep_alive=SEARCH_KEEP_ALIVE)
+    body = stub.last("/api/embed")
+    assert body["input"] == ["search_document: Total 84 €"] and body["keep_alive"] == "30m"
+    OllamaClassifier(url=stub.url).embed(["quel jour ?"], prefix=QUERY_PREFIX)
+    assert stub.last("/api/embed")["input"] == ["search_query: quel jour ?"]
+
+
+def test_embed_defaults_to_classification_prefix_without_keep_alive(stub):
+    stub.reply("/api/embed", {"embeddings": [[1.0, 0.0]]})
+    OllamaClassifier(url=stub.url).embed(["x"])
+    body = stub.last("/api/embed")
+    assert body["input"] == ["classification: x"] and "keep_alive" not in body
+
+
+def test_unavailable_hint_names_the_command():
+    e = ClassifierUnavailable("Ollama not reachable at http://h: start it (ollama serve)")
+    assert e.reason == "Ollama not reachable at http://h: start it (ollama serve)"
+    assert e.hint.endswith("then: localmind classify")
+    assert e.with_command("localmind index").hint == (
+        "Ollama not reachable at http://h: start it (ollama serve), then: localmind index"
+    )
+    assert str(e.with_command("localmind index")) == e.with_command("localmind index").hint
 
 
 def test_embed_batches_by_32(stub):
@@ -141,3 +173,10 @@ def test_env_overrides(monkeypatch):
     client = OllamaClassifier()
     assert (client.llm, client.embed_model, client.url) == ("mistral:7b", "bge-m3", "http://host:1234")
     assert client.name == "mistral:7b+bge-m3"
+
+
+def test_default_url_is_ipv4_loopback(monkeypatch):
+    # On Windows, "localhost" tries IPv6 (::1) first; Ollama listens on IPv4
+    # only, and every request paid ~2 s for the fallback (stage 4 end-to-end).
+    monkeypatch.delenv("LOCALMIND_OLLAMA_URL", raising=False)
+    assert OllamaClassifier().url == "http://127.0.0.1:11434"

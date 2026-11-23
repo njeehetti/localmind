@@ -204,20 +204,25 @@ class FolderStore:
 
     # -- documents -------------------------------------------------------
     def _masked_text(self, document_id: int) -> str:
+        return "\f".join(text for _, text in self._masked_pages(document_id))
+
+    def _masked_pages(self, document_id: int) -> list[tuple[int, str]]:
+        """``(page_no, text)`` of the usable pages, sensitive spans masked."""
         pages = self._conn.execute(
-            "SELECT id, text FROM pages WHERE document_id = ? AND status = 'ok' ORDER BY page_no",
+            """SELECT id, page_no, text FROM pages WHERE document_id = ? AND status = 'ok'
+               ORDER BY page_no""",
             (document_id,),
         ).fetchall()
-        texts = []
-        for page_id, text in pages:
+        masked = []
+        for page_id, page_no, text in pages:
             spans = self._conn.execute(
                 'SELECT kind, start, "end" FROM sensitive_spans WHERE page_id = ? ORDER BY start DESC',
                 (page_id,),
             ).fetchall()
             for kind, start, end in spans:  # from the end: earlier offsets stay valid
                 text = text[:start] + MASKS.get(kind, "[SENSITIVE]") + text[end:]
-            texts.append(text)
-        return "\f".join(texts)
+            masked.append((page_no, text))
+        return masked
 
     def _document_to_classify(self, document_id: int) -> DocumentToClassify:
         files = self._conn.execute(

@@ -16,7 +16,7 @@ ENV_OLLAMA_URL = "LOCALMIND_OLLAMA_URL"
 
 DEFAULT_LLM = "qwen3:8b"
 DEFAULT_EMBED_MODEL = "nomic-embed-text"
-DEFAULT_OLLAMA_URL = "http://localhost:11434"
+DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"  # not "localhost": on Windows it tries IPv6 first, +2 s per request
 
 
 def default_db_path() -> Path:

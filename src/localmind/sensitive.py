@@ -60,8 +60,9 @@ def nir_is_valid(digits: str) -> bool:
 
 # --- candidate finders -----------------------------------------------------
 
-# Two letters, two check digits, then groups of letters/digits separated by single spaces.
-_IBAN = re.compile(r"\b[A-Za-z]{2}\d{2}[A-Za-z0-9]*(?: [A-Za-z0-9]+)*")
+# Two letters, two check digits, then groups of letters/digits separated by one
+# space or one line break (an IBAN wrapped at the end of a line).
+_IBAN = re.compile(r"\b[A-Za-z]{2}\d{2}[A-Za-z0-9]*(?:[ \n][A-Za-z0-9]+)*")
 _NIR = re.compile(r"(?<!\d)[12](?: ?\d){14}(?!\d)")
 # Real cards are written contiguous, 4-4-4-4(-3) or 4-6-5 (Amex), with one
 # consistent separator. Accepting a space anywhere would turn every pair of
@@ -81,14 +82,14 @@ def _find_ibans(text: str) -> list[SensitiveSpan]:
     spans = []
     for m in _IBAN.finditer(text):
         # The regex is greedy ("FR76 ... 189 fin" swallows "fin"), so drop
-        # trailing space-separated groups until the checksum passes.
-        groups = m.group().split(" ")
-        while groups:
-            candidate = " ".join(groups)
-            if iban_is_valid(candidate):
+        # trailing groups until the checksum passes.
+        ends = [g.end() for g in re.finditer(r"[A-Za-z0-9]+", m.group())]
+        while ends:
+            candidate = m.group()[: ends[-1]]
+            if iban_is_valid(candidate.replace("\n", " ")):
                 spans.append(SensitiveSpan("iban", m.start(), m.start() + len(candidate)))
                 break
-            groups.pop()
+            ends.pop()
     return spans
 
 

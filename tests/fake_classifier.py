@@ -13,8 +13,12 @@ import json
 
 from localmind.ollama import ClassifierUnavailable
 
-DIM = 64
-KEYWORDS = ("facture", "paie", "remboursement", "contrat", "ordonnance", "impot")
+DIM = 512  # one axis per distinct text: stage 4 makes many chunks
+KEYWORDS = (
+    "facture", "paie", "remboursement", "contrat", "ordonnance", "impot",
+    # stage 4 (appended: earlier axes keep their index)
+    "electricite", "telephone", "bail", "rendez-vous",
+)
 
 
 class FakeClassifier:
@@ -28,14 +32,14 @@ class FakeClassifier:
         self.fail_choose_after = fail_choose_after  # Ollama stops after n LLM answers
         self.embedded: list[str] = []
         self.embed_batches: list[list[str]] = []
+        self.prefixes: list[str] = []
+        self.keep_alives: list = []
         self.chats: list[list[dict]] = []
         self.releases = 0
         self._axes: dict[str, int] = {}
 
     def _unavailable(self):
-        return ClassifierUnavailable(
-            "Ollama not reachable at http://fake: start it (ollama serve), then: localmind classify"
-        )
+        return ClassifierUnavailable("Ollama not reachable at http://fake: start it (ollama serve)")
 
     def _vector(self, text: str) -> list[float]:
         low = text.casefold()
@@ -46,7 +50,10 @@ class FakeClassifier:
         vec[axis] = 1.0
         return vec
 
-    def embed(self, texts):
+    def embed(self, texts, prefix="classification: ", keep_alive=None):
+        """Vectors come from the text alone; the prefix and keep-alive are recorded."""
+        self.prefixes.append(prefix)
+        self.keep_alives.append(keep_alive)
         if self.unavailable or (self.fail_embed_on and any(self.fail_embed_on in t for t in texts)):
             raise self._unavailable()
         self.embedded.extend(texts)

@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 from typing import get_args
 
-from localmind import cli_folders
+from localmind import cli_folders, cli_search
 from localmind.catalog import Catalog, Decision, PendingOcr
 from localmind.config import default_db_path, sensitive_policy_from_env
 from localmind.ingest import IngestReport, Outcome, apply_decision, ingest, retry, run_ocr
@@ -165,8 +165,12 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
             _print_report(ingest(path, catalog, _config(args)), args.verbose)
         resolved = [p.resolve() for p in args.paths]
         _offer_ocr(catalog, resolved, args)
+        reachable = True
         if not args.no_classify:
-            cli_folders.classify_and_review(catalog, resolved)
+            then = "localmind classify" if args.no_index else "localmind classify; localmind index"
+            reachable = cli_folders.classify_and_review(catalog, resolved, then=then)
+        if not args.no_index and reachable:  # Ollama down: the hint above said it all
+            cli_search.index_after_ingest(catalog)
     return 0
 
 
@@ -185,6 +189,8 @@ def _cmd_stats(args: argparse.Namespace) -> int:
         ("sensitive flags", s.sensitive_flags),
         ("ocr pages", s.ocr_pages),
         ("blank pages", s.blank_pages),
+        ("chunks", s.chunks),
+        ("indexed docs", s.indexed_documents),
     ]
     for label, value in rows:
         print(f"{label + ':':<17}{value}")
@@ -296,6 +302,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument(
         "--no-classify", action="store_true", help="do not sort the documents into folders"
     )
+    p_ingest.add_argument(
+        "--no-index", action="store_true", help="do not prepare the documents for search"
+    )
     p_ingest.set_defaults(func=_cmd_ingest)
 
     sub.add_parser("stats", help="catalog summary").set_defaults(func=_cmd_stats)
@@ -325,6 +334,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.set_defaults(func=_cmd_decide, decision=decision)
 
     cli_folders.register(sub)
+    cli_search.register(sub)
     return parser
 
 

@@ -29,7 +29,12 @@ from localmind.config import (
 )
 from localmind.scoring import normalize
 
-EMBED_PREFIX = "classification: "  # nomic-embed-text's convention for this task
+# nomic-embed-text is told what each vector is for by a task prefix.
+CLASSIFY_PREFIX = "classification: "  # stage 3: sorting into folders
+EMBED_PREFIX = CLASSIFY_PREFIX  # stage 3 name, kept
+DOCUMENT_PREFIX = "search_document: "  # stage 4: a chunk, to be found
+QUERY_PREFIX = "search_query: "  # stage 4: a question, looking for chunks
+SEARCH_KEEP_ALIVE = "30m"  # keep the small embedding model loaded between questions
 BATCH = 32
 CHECK_TIMEOUT = 3  # seconds: is Ollama there at all?
 CALL_TIMEOUT = 300  # seconds: a cold model load can take a while
@@ -37,18 +42,27 @@ LLM_OPTIONS = {"temperature": 0, "num_ctx": 4096}  # 4k context fits qwen3:8b in
 
 
 class ClassifierUnavailable(RuntimeError):
-    """Ollama is not reachable, or a model is missing. ``hint`` says what to do."""
+    """Ollama is not reachable, or a model is missing. ``hint`` says what to do:
+    ``reason``, then the command to run again once it is fixed."""
 
-    def __init__(self, hint: str) -> None:
-        super().__init__(hint)
-        self.hint = hint
+    def __init__(self, reason: str, command: str = "localmind classify") -> None:
+        self.reason = reason
+        self.command = command
+        self.hint = f"{reason}, then: {command}"
+        super().__init__(self.hint)
+
+    def with_command(self, command: str) -> ClassifierUnavailable:
+        """The same problem, pointing at another command (index, search...)."""
+        return ClassifierUnavailable(self.reason, command)
 
 
 class Classifier(Protocol):
     name: str
     embed_model: str
 
-    def embed(self, texts: Sequence[str]) -> list[list[float]]: ...
+    def embed(
+        self, texts: Sequence[str], prefix: str = CLASSIFY_PREFIX, keep_alive: str | None = None
+    ) -> list[list[float]]: ...
 
     def choose(self, messages: list[dict], schema: dict) -> dict: ...
 
@@ -67,9 +81,7 @@ class OllamaClassifier:
 
     # -- HTTP ------------------------------------------------------------
     def _unreachable(self) -> ClassifierUnavailable:
-        return ClassifierUnavailable(
-            f"Ollama not reachable at {self.url}: start it (ollama serve), then: localmind classify"
-        )
+        return ClassifierUnavailable(f"Ollama not reachable at {self.url}: start it (ollama serve)")
 
     def _request(self, path: str, body: dict | None, timeout: float) -> Any:
         data = json.dumps(body).encode() if body is not None else None
@@ -90,21 +102,24 @@ class OllamaClassifier:
             return self._request(path, body, CALL_TIMEOUT)
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
-                raise ClassifierUnavailable(
-                    f"Model {model} is missing: ollama pull {model}, then: localmind classify"
-                ) from exc
+                raise ClassifierUnavailable(f"Model {model} is missing: ollama pull {model}") from exc
             raise self._unreachable() from exc
         except (urllib.error.URLError, OSError) as exc:  # includes timeouts, refused
             raise self._unreachable() from exc
 
     # -- models ----------------------------------------------------------
-    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+    def embed(
+        self, texts: Sequence[str], prefix: str = CLASSIFY_PREFIX, keep_alive: str | None = None
+    ) -> list[list[float]]:
+        """Normalised vectors of ``prefix + text``, in batches of 32. ``keep_alive``
+        (e.g. "30m") tells Ollama how long to keep the model loaded afterwards."""
         vectors: list[list[float]] = []
         for start in range(0, len(texts), BATCH):
-            batch = [EMBED_PREFIX + t for t in texts[start : start + BATCH]]
-            answer = self._post(
-                "/api/embed", {"model": self.embed_model, "input": batch}, self.embed_model
-            )
+            batch = [prefix + t for t in texts[start : start + BATCH]]
+            body: dict[str, Any] = {"model": self.embed_model, "input": batch}
+            if keep_alive is not None:
+                body["keep_alive"] = keep_alive
+            answer = self._post("/api/embed", body, self.embed_model)
             got = answer.get("embeddings", [])
             if len(got) != len(batch):
                 raise ValueError(f"expected {len(batch)} embeddings, got {len(got)}")

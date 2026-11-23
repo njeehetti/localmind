@@ -17,7 +17,7 @@ on your machine: no cloud, no API key, your files never leave your disk.
 | 2a | [Filtering & quarantine](docs/02-quality-filtering.md) | Page-level quality rules, thresholds, checksums (Luhn, mod 97), user decisions | ✅ |
 | 2b | [OCR](docs/02b-ocr.md) | Neural OCR (docTR, PyTorch, GPU) for scans and photos, confidence, caching | ✅ |
 | 3 | [Classification](docs/03-classification.md) | Embeddings, cosine similarity, a local LLM as second judge, virtual folders | ✅ |
-| 4 | Chunking & embeddings | Turning text into vectors | ⏳ |
+| 4 | [Chunking & vector search](docs/04-chunking-vectors.md) | Chunks, overlap, asymmetric prefixes, a hand-made vector store (SQLite + numpy) | ✅ |
 | 5 | Retrieval | Vector search, BM25, hybrid search | ⏳ |
 | 6 | Generation | Grounded answers with citations (Ollama) | ⏳ |
 | 7 | Evaluation | Measuring whether answers are right | ⏳ |
@@ -63,6 +63,19 @@ uv run localmind move FILE Maison/Contrats  # your choice, remembered for good
 Folders are virtual (rows in the catalog): nothing is moved. Models run in
 [Ollama](https://ollama.com) on `localhost`; sensitive values are masked before anything
 reaches them. Without Ollama, `ingest` still works (`--no-classify` skips the step).
+
+### Searching your documents
+
+```bash
+uv run localmind ingest ~/Documents/inbox                 # also cuts documents into chunks and embeds them
+uv run localmind search "quel est le préavis de mon bail ?"
+# 0.71  bail_appartement.txt p.1  "...le délai de préavis est d'un mois..."
+uv run localmind prune                                    # forget files you deleted from disk
+```
+
+Search returns the passages closest in meaning, with file and page; it never cites a
+deleted file and never shows a masked value. Answers written by a local LLM come in
+stage 6.
 
 ## Use it as a library
 

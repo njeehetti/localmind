@@ -82,10 +82,14 @@ def print_summary(report: ClassifyReport) -> None:
 
 
 def classify_and_review(
-    catalog: Catalog, paths: list[Path] | None, redo: bool = False
-) -> None:
+    catalog: Catalog,
+    paths: list[Path] | None,
+    redo: bool = False,
+    then: str = "localmind classify",
+) -> bool:
     """Classify (only under ``paths`` when given), print the summary, then
-    offer the review of what waits for the user."""
+    offer the review of what waits for the user. Returns False when Ollama
+    could not be reached; the hint then names ``then`` as the command to run."""
     classifier = make_classifier()
     results: list[DocClassification] = []
     unavailable = None
@@ -94,17 +98,19 @@ def classify_and_review(
         results.extend(report.results)
         unavailable = unavailable or report.unavailable
         if unavailable:
+            unavailable = unavailable.removesuffix("localmind classify") + then
             break
     print_summary(ClassifyReport(tuple(results), unavailable))
     waiting = [c for c in catalog.pending_reviews() if c.document_id in {r.document_id for r in results}]
     if not waiting:
-        return
+        return unavailable is None
     if not _interactive():
         print(f"{len(waiting)} classification(s) to confirm: localmind folders review")
-        return
+        return unavailable is None
     answer = _prompt(f"Confirm the {len(waiting)} now? [y/N] ")
     if answer is not None and answer.lower() in {"y", "yes", "o", "oui"}:
         review(catalog, waiting)
+    return unavailable is None
 
 
 # -- review ---------------------------------------------------------------
