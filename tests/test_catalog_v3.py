@@ -94,7 +94,7 @@ def test_v2_catalog_migrates_in_place_keeping_everything(tmp_path):
         assert cat.stats().files == 1 and cat.stats().documents == 1
         assert cat.stats().partial == 1
         assert cat.ocr_pending() == PendingOcr(pages=1, files=1)
-    assert user_version(db) == 5  # v2 -> v3 -> v4 -> v5
+    assert user_version(db) == 6  # v2 -> v3 -> v4 -> v5 -> v6
 
 
 def test_v1_rebuild_keeps_decisions(tmp_path):

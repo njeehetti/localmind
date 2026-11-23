@@ -48,7 +48,7 @@ from localmind.catalog_folders import (
 from localmind.ocr import OcrPage
 from localmind.quality import PageVerdict, Reason
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _PAGES_COLUMNS = """
     id              INTEGER PRIMARY KEY,
@@ -113,7 +113,7 @@ CREATE INDEX IF NOT EXISTS idx_pages_document ON pages(document_id);
 # Tables a v1 catalog rebuild may drop. Never "decisions", "ocr_cache" nor
 # "folder_decisions".
 _REBUILT_TABLES = (
-    "chunk_vectors", "chunks", "classifications", "embeddings", "sensitive_spans", "pages", "files", "documents"
+    "chunks_fts", "chunk_vectors", "chunks", "classifications", "embeddings", "sensitive_spans", "pages", "files", "documents"
 )
 
 # v2 -> v3 in place. SQLite cannot change a CHECK constraint with ALTER TABLE,
@@ -231,9 +231,17 @@ class Catalog(FolderStore, ChunkStore):
         self._conn = sqlite3.connect(db_path)
         self._conn.execute("PRAGMA foreign_keys = ON")
         self.rebuilt_from_v1 = self._migrate()
+        had_keywords = self._has_table("chunks_fts")
         self._conn.executescript(_SCHEMA)
-        self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-        self._conn.commit()
+        with self._conn:
+            if not had_keywords:  # v5 -> v6: index the chunks already there
+                self._conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')")
+            self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+    def _has_table(self, name: str) -> bool:
+        return bool(self._conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = ?", (name,)
+        ).fetchone()[0])
 
     def _migrate(self) -> bool:
         """Bring an older catalog to the current schema. Returns True if it was
@@ -243,7 +251,8 @@ class Catalog(FolderStore, ChunkStore):
           ``ingest`` recreates them (originals are untouched). ``decisions`` and
           ``ocr_cache`` are never dropped.
         * v2 (stage 2a) is upgraded in place: nothing is lost.
-        * v3 (stage 2b) -> v4 -> v5 only add the stage 3 and stage 4 tables.
+        * v3 (stage 2b) -> v4 -> v5 only add the stage 3 and stage 4 tables;
+          v5 -> v6 adds the keyword index and fills it from the existing chunks.
         """
         version = self._conn.execute("PRAGMA user_version").fetchone()[0]
         has_tables = self._conn.execute(
@@ -251,8 +260,8 @@ class Catalog(FolderStore, ChunkStore):
         ).fetchone()[0]
         if version >= SCHEMA_VERSION or not has_tables:
             return False
-        if version in (3, 4):
-            return False  # v3 -> v4 -> v5 only add tables: _SCHEMA creates them
+        if version in (3, 4, 5):
+            return False  # only new tables: _SCHEMA creates them, __init__ fills chunks_fts
         if version == 2:
             self._conn.commit()
             self._conn.execute("PRAGMA foreign_keys = OFF")  # no effect inside a transaction
