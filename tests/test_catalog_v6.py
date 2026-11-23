@@ -122,3 +122,16 @@ def test_v1_rebuild_drops_keyword_index_too(tmp_path):
         ids = add_files(cat, tmp_path / "in", {"a.txt": "Facture EDF de mars"})
         _store(cat, ids["a.txt"], ["girafe"])
         assert cat.keyword_rows('"girafe"', 10) == _ids(cat, ids["a.txt"])
+
+
+def test_fts_syntax_in_questions_never_raises(catalog, tmp_path):  # Review Focus 1
+    from localmind.keyword import keyword_query
+    from tests.test_keyword import FTS_SYNTAX
+
+    ids = add_files(catalog, tmp_path / "in", {"a.txt": "Facture EDF de mars"})
+    _store(catalog, ids["a.txt"], ["Relevé électricité de mars"])
+    for q in FTS_SYNTAX:
+        match = keyword_query(q)
+        if match:
+            catalog.keyword_rows(match, 10)
+    assert catalog.keyword_rows(keyword_query("l'électricité"), 10) == _ids(catalog, ids["a.txt"])
