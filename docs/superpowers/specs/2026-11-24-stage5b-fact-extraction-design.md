@@ -2,7 +2,7 @@
 
 Status: approaches chosen with the user on 2026-11-24 (several facts per document;
 invoices count, bank-statement lines kept apart; approach C: rules find the values,
-the LLM only labels them; totals = confirmed + unconfirmed, probable duplicates counted once). Awaiting approval of this document.
+the LLM only labels them; totals = confirmed + unconfirmed, probable duplicates counted once). Approved 2026-11-24; implemented (catalog v7, version 0.5.0, end to end on scratch data).
 
 ## 1. Intent
 
