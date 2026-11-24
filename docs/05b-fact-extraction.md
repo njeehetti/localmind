@@ -67,7 +67,8 @@ Five versions on 12 scratch documents before writing the real code:
 
 `facts()` (`facts_query.py`) returns the rows, two totals and a coverage:
 
-- **confirmed** = payments; **unconfirmed** = dues dated today or before. Future dues and
+- **confirmed** = payments dated today or before (a "will be debited on 15/12" waits
+  for its day); **unconfirmed** = dues dated today or before. Future dues and
   day-of-month dues are listed, never summed. Bank lines are never summed with invoices
   (the same money would count twice). Euro only.
 - **Probable duplicates**: same counterparty, same amount, dates at most 5 days apart
@@ -125,6 +126,9 @@ with an amount.
 
 ## 7. Known limits
 
+- A number just before an amount ("Mensualité 3 150,00 €", "n° 4 250,00 €") is read as a
+  counter, not a thousands group: 150,00 €. A real "3 150,00 €" after such a word is read
+  short (a smaller fact beats an inflated one).
 - French formats only; an amount without `€`/`EUR`/`euros` is not seen.
 - Long tables are slow (output-bound) and capped at 50 facts per document.
 - The model decides what a value *is*: a wrong role (an amount that was a deposit, not a
