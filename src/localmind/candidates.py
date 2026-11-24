@@ -44,6 +44,13 @@ _TIME = re.compile(
     r"(?<![\d,.:/])([01]?\d|2[0-3])\s?(?:h(?:\s?([0-5]\d))?(?![a-zà-ÿ\d])|:([0-5]\d))(?!\d)",
     re.IGNORECASE,
 )
+# A counter right before a number ("Mensualité 3 150,00 €", "n° 4 250,00 €",
+# "15/03 150,00 €") is not its thousands group: "3 150" would read 3 150 €.
+_COUNTER_BEFORE = re.compile(
+    r"(?:[/×x]|n[°º]|\bno\.?|\bqt[ée]|quantit[ée]|[ée]ch[ée]ance|mensualit[ée]|\bligne|\blot|\barticle|\bart\.)\s*$",
+    re.IGNORECASE,
+)
+_LEADING_GROUP = re.compile(r"\d{1,3} (?=\d{3})")
 _ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ"  # no I, O: never read as 1, 0
 _BLOCK = 10 * len(_ALPHA)  # digit + letter codes per block
 
@@ -140,9 +147,12 @@ class _Finder:
         return all(end <= s or start >= e for s, e in self.taken)
 
     def add(self, kind: str, match: re.Match[str], **values) -> None:
-        if self._free(match.start(), match.end()):
-            self.taken.append((match.start(), match.end()))
-            self.found.append((kind, match.start(), match.end(), values))
+        self.add_span(kind, match.start(), match.end(), **values)
+
+    def add_span(self, kind: str, start: int, end: int, **values) -> None:
+        if self._free(start, end):
+            self.taken.append((start, end))
+            self.found.append((kind, start, end, values))
 
     def run(self) -> PageCandidates:
         text = self.text
@@ -160,8 +170,14 @@ class _Finder:
                 if iso:
                     self.add("D", m, iso=iso, day_of_month=None)
         for m in _AMOUNT.finditer(text):
-            sign, number = (m[1] or "", m[2]) if m[2] else (m[3], m[4])
-            self.add("M", m, cents=_cents(sign, number), currency=CURRENCY)
+            if not m[2]:  # "€ 84,20"
+                self.add("M", m, cents=_cents(m[3], m[4]), currency=CURRENCY)
+                continue
+            sign, number, start = m[1] or "", m[2], m.start()
+            leading = _LEADING_GROUP.match(number)
+            if leading and _COUNTER_BEFORE.search(text[max(0, start - 25) : start]):
+                sign, number, start = "", number[leading.end() :], m.start(2) + leading.end()
+            self.add_span("M", start, m.end(), cents=_cents(sign, number), currency=CURRENCY)
         for m in _TIME.finditer(text):
             self.add("H", m, hhmm=f"{int(m[1]):02d}:{m[2] or m[3] or '00'}")
         return self._numbered()

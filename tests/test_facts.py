@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
 
 from localmind.candidates import annotate, find_candidates
 from localmind.catalog import Catalog
-from localmind.facts import MAX_FACTS, PAGE_CHARS, extract_facts, parse_page_answer
+from localmind.facts import MAX_FACTS, PAGE_CHARS, TEXT_TOKENS, estimated_tokens, extract_facts, parse_page_answer
 from tests.fake_classifier import FakeClassifier
 from tests.pdf_factory import make_pdf
 from tests.stage4_data import IBAN, add_files, count
@@ -144,6 +145,19 @@ def test_an_appointment_with_an_amount_is_rejected():
     assert (kept, rejected) == ([], 1)
 
 
+def test_a_negative_payment_or_due_is_stored_as_a_positive_amount():
+    text = "Montant débité : -84,20 € le 15/03/2026"
+    kept, _ = parse(text, lambda a: [item(amount=tag(a, "-84,20"), date=tag(a, "15/03/2026"))])
+    assert kept[0].amount_cents == 8420
+
+
+def test_a_bank_movement_keeps_its_sign():
+    text = "15/03/2026  PRLV EDF  -84,20 €"
+    kept, _ = parse(text, lambda a: [item(kind="bank_movement", amount=tag(a, "-84,20"), date=tag(a, "15/03/2026"))],
+                    doc_type="bank_statement")
+    assert kept[0].amount_cents == -8420
+
+
 def test_a_money_fact_needs_an_amount_or_a_date():
     kept, rejected = parse(INVOICE, [item()])
     assert (kept, rejected) == ([], 1)
@@ -239,6 +253,32 @@ def test_text_beyond_the_cut_is_never_sent(catalog, tmp_path):
     report = extract_facts(catalog, llm)
     assert all(len(__import__("json").loads(c[-1]["content"])["text"]) <= PAGE_CHARS for c in llm.chats)
     assert report.facts == 0
+
+
+def test_a_model_citing_a_tag_beyond_the_cut_gets_it_rejected(catalog, tmp_path):
+    filler = "Texte de remplissage sans valeur. " * (PAGE_CHARS // 30)
+    text = "Total 12,00 € le 01/03/2026\n" + filler + "\nTotal 84,20 € le 15/03/2026"
+    add_files(catalog, tmp_path / "in", {"a.txt": text})
+    found = find_candidates(catalog.masked_pages(1)[0][1])
+    hidden = found.amounts[-1].id  # 84,20 €, after the cut
+
+    def cheater(payload):
+        assert f"[{hidden}]" not in payload["text"]
+        shown = re.search(r"\[(D\w+)\]", payload["text"])[1]
+        return {"document_type": "invoice", "facts": [item(amount=hidden, date=shown)]}
+
+    report = extract_facts(catalog, FakeClassifier(answers=cheater))
+    assert (report.rejected, report.facts) == (1, 0)
+
+
+def test_dense_pages_are_cut_to_fit_the_model_context(catalog, tmp_path):
+    lines = "\n".join(f"{(i % 28) + 1:02d}/03/2026  CB 1234 5678  -{i + 1},{i % 100:02d} €" for i in range(300))
+    add_files(catalog, tmp_path / "in", {"a.txt": "Relevé\n" + lines})
+    llm = FakeClassifier(answers=lambda p: {"document_type": "bank_statement", "facts": []})
+    extract_facts(catalog, llm)
+    sent = json.loads(llm.chats[0][-1]["content"])["text"]
+    assert estimated_tokens(sent) <= TEXT_TOKENS
+    assert len(sent) < PAGE_CHARS
 
 
 def test_unavailable_midway_keeps_finished_documents_whole(catalog, tmp_path):

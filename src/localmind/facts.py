@@ -29,7 +29,10 @@ from localmind.ollama import Classifier, ClassifierUnavailable
 
 PROMPT_VERSION = "1"
 MAX_FACTS = 50  # per document; beyond it the document is marked incomplete
-PAGE_CHARS = 8000  # annotated page text sent to the model (num_ctx 4096)
+PAGE_CHARS = 8000  # annotated page text sent to the model, at most
+# num_ctx is 4096 tokens: ~750 for the system prompt, ~1100 kept for the answer
+# (15 facts), the rest for the page. Digits cost about one token each.
+TEXT_TOKENS = 2200
 MAX_TEXT = 200  # counterparty, place, label…: longer answers are cut
 
 KINDS = ("payment", "due", "appointment", "bank_movement")
@@ -124,6 +127,25 @@ def _text(value: object) -> str | None:
     return value[:MAX_TEXT] or None
 
 
+def estimated_tokens(text: str) -> float:
+    """Rough token count for qwen: one per digit, one per 3 other characters."""
+    digits = sum(c.isdigit() for c in text)
+    return digits + (len(text) - digits) / 3
+
+
+def _fit(annotated: str) -> str:
+    """The annotated page cut to ``PAGE_CHARS`` and ``TEXT_TOKENS``, at a line
+    break when there is one, so the model sees every character it is sent."""
+    text = annotated[:PAGE_CHARS]
+    cost = 0.0
+    for i, c in enumerate(text):
+        cost += 1 if c.isdigit() else 1 / 3
+        if cost > TEXT_TOKENS:
+            cut = text.rfind("\n", 0, i)
+            return text[: cut if cut > 0 else i]
+    return text
+
+
 def _line(text: str, pos: int) -> int:
     return text.count("\n", 0, pos)
 
@@ -165,7 +187,8 @@ def _fact(raw: object, doc_type: str, found: PageCandidates, text: str,
     return NewFact(
         page_no=page_no,
         kind=kind,
-        amount_cents=amount.cents if amount else None,
+        # "Montant débité : -84,20 €" is 84,20 € paid; only a bank line keeps its sign
+        amount_cents=(amount.cents if kind == "bank_movement" else abs(amount.cents)) if amount else None,
         currency=amount.currency if amount else None,
         date=when.iso if when else None,
         day_of_month=when.day_of_month if when else None,
@@ -230,7 +253,7 @@ class _Run:
         found = find_candidates(text)
         if not found.amounts and not found.dates:
             return PageResult(page_no, "no_candidates", ()), 0
-        annotated = annotate(text, found)[:PAGE_CHARS]
+        annotated = _fit(annotate(text, found))
         visible = {c.id for c in found.all() if f"[{c.id}]" in annotated}
         messages = _messages(file, folder, page_no, annotated)
         for _ in range(2):  # one retry on an unusable answer

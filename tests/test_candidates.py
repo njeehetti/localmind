@@ -100,6 +100,22 @@ def test_not_times(text):
     assert find_candidates(text).times == ()
 
 
+@pytest.mark.parametrize(
+    "text, cents",
+    [  # final review: a number before an amount must not become its thousands group
+        ("Qté 2 450,00 €", 45000),
+        ("Échéance n° 4 250,00 €", 25000),
+        ("Mensualité 3 150,00 €", 15000),
+        ("15/03 150,00 €", 15000),
+        ("Article 12 345,00 €", 34500),
+        ("TOTAL 2 450,00 €", 245000),
+        ("Total 1 234 567,89 €", 123456789),
+    ],
+)
+def test_a_number_before_an_amount_is_not_its_thousands(text, cents):
+    assert [a.cents for a in find_candidates(text).amounts] == [cents]
+
+
 def test_a_date_is_never_also_an_amount_or_a_time():
     found = find_candidates("Intervention du 15.03.26 à 14 h, total € 1.234,56")
     assert [d.iso for d in found.dates] == ["2026-03-15"]

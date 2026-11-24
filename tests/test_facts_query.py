@@ -54,6 +54,13 @@ def test_question_1_electricity_2026(catalog, tmp_path):
     assert (r.confirmed_cents, r.unconfirmed_cents, r.total_cents) == (16840, 9800, 26640)
 
 
+def test_a_future_payment_is_listed_not_confirmed(catalog, tmp_path):
+    docs(catalog, tmp_path, a=[nf(cents=8420, iso="2026-12-15")], b=[nf(cents=100, iso=None, who="Dentiste")])
+    r = facts(catalog, today=TODAY)
+    assert len(r.facts) == 2
+    assert (r.confirmed_cents, r.unconfirmed_cents) == (100, 0)  # undated payment: said paid
+
+
 def test_counterparty_matches_by_substring_of_the_key(catalog, tmp_path):
     docs(catalog, tmp_path, a=[nf(who="EDF SA")], b=[nf(who="Électricité de France", cents=1)])
     assert [f.counterparty for f in facts(catalog, counterparty="EDF").facts] == ["EDF SA"]

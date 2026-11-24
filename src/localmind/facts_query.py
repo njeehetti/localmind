@@ -12,8 +12,8 @@ and the coverage. Decided here, at query time, never stored:
 * **Probable duplicates**: same counterparty, same amount, dates at most 5
   days apart = one payment (a ``payment`` wins over a ``due``, else the older
   fact). The other row stays in the list, marked, but leaves the totals.
-* **Totals**, euro only: ``confirmed`` = payments; ``unconfirmed`` = dues dated
-  today or before. Future dues, day-of-month dues and bank lines are listed,
+* **Totals**, euro only: ``confirmed`` = payments dated today or before (or
+  undated: the text says paid); ``unconfirmed`` = dues dated today or before. Future dues, day-of-month dues and bank lines are listed,
   never summed.
 * **Coverage**: documents not read yet (or read by an older prompt), or read
   with failures, so a sum can say what it may be missing.
@@ -130,7 +130,7 @@ def _totals(found: list[Fact], today: Day) -> tuple[int, int]:
     for f in found:
         if f.duplicate_of is not None or f.currency != SUMMED_CURRENCY or f.amount_cents is None:
             continue
-        if f.kind == "payment":
+        if f.kind == "payment" and (f.date is None or f.date <= today):  # "sera prélevé le …" later
             confirmed += f.amount_cents
         elif f.kind == "due" and f.date is not None and f.date <= today:
             unconfirmed += f.amount_cents
