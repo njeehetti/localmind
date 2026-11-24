@@ -19,6 +19,7 @@ on your machine: no cloud, no API key, your files never leave your disk.
 | 3 | [Classification](docs/03-classification.md) | Embeddings, cosine similarity, a local LLM as second judge, virtual folders | ✅ |
 | 4 | [Chunking & vector search](docs/04-chunking-vectors.md) | Chunks, overlap, asymmetric prefixes, a hand-made vector store (SQLite + numpy) | ✅ |
 | 5 | [Hybrid search](docs/05-hybrid-search.md) | BM25 with SQLite FTS5, reciprocal rank fusion, folder filter, keyword fallback | ✅ |
+| 5b | [Fact extraction](docs/05b-fact-extraction.md) | Rules find, a local LLM labels; provenance spans, exact sums, duplicates | ✅ |
 | 6 | Generation | Grounded answers with citations (Ollama) | ⏳ |
 | 7 | Evaluation | Measuring whether answers are right | ⏳ |
 
@@ -78,6 +79,21 @@ Search combines meaning (vectors) and exact words (BM25), with file, page and fo
 (`(to confirm)` until you review the LLM's choice); it never cites a deleted file and
 never shows a masked value. Without Ollama it falls back to keywords. Answers written by
 a local LLM come in stage 6.
+
+### Facts: sums and dates
+
+```bash
+uv run localmind facts list --kind payment --kind due --who edf --from 2026-01-01 --to 2026-12-31 --sum
+# 15/03/2026  payment            84,20 €  EDF  facture_edf_mars.txt p.1
+# Total: 1 162,20 € (confirmed 84,20 €, unconfirmed 1 078,00 €)
+uv run localmind facts list --upcoming --kind appointment   # next appointments
+uv run localmind facts list --kind due --who free           # le 5 du mois  due  19,99 €  FREE MOBILE …
+```
+
+`ingest` also reads each document's payments, dues, appointments and bank-statement
+lines (`--no-facts` to skip; `localmind facts extract` later). Rules find every amount
+and date, the local LLM only says what each one is: a number is always the one written
+in the document, with its page. Bank lines and probable duplicates never inflate a sum.
 
 ## Use it as a library
 

@@ -14,6 +14,8 @@ from localmind.catalog_folders import DocFolder
 from localmind.chunking import ChunkConfig
 from localmind.classify import ClassifyReport, classify
 from localmind.config import default_db_path, sensitive_policy_from_env
+from localmind.facts import ExtractReport, extract_facts
+from localmind.facts_query import Coverage, Fact, FactsResult, facts
 from localmind.folder_actions import choose_folder, confirm, move, rename_folder
 from localmind.folders import FolderFilter, UnknownFolder
 from localmind.indexing import IndexReport, index
@@ -26,6 +28,12 @@ from localmind.scoring import ClassifyConfig
 from localmind.search import CatalogBusy, Hit, VectorIndex, search
 
 __all__ = [
+    "Coverage",
+    "ExtractReport",
+    "Fact",
+    "FactsResult",
+    "extract_facts",
+    "facts",
     "Catalog",
     "CatalogBusy",
     "ChunkConfig",
@@ -66,4 +74,4 @@ __all__ = [
     "run_ocr",
     "sensitive_policy_from_env",
 ]
-__version__ = "0.4.0"
+__version__ = "0.5.0"

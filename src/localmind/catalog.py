@@ -38,6 +38,7 @@ from types import TracebackType
 from typing import Literal
 
 from localmind.catalog_chunks import CHUNKS_SCHEMA, ChunkStore
+from localmind.catalog_facts import FACT_TABLES, FACTS_SCHEMA, FactStore
 from localmind.catalog_folders import (
     FOLDERS_SCHEMA,
     Classification,
@@ -48,7 +49,7 @@ from localmind.catalog_folders import (
 from localmind.ocr import OcrPage
 from localmind.quality import PageVerdict, Reason
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _PAGES_COLUMNS = """
     id              INTEGER PRIMARY KEY,
@@ -108,12 +109,12 @@ CREATE TABLE IF NOT EXISTS ocr_cache (
 CREATE INDEX IF NOT EXISTS idx_files_file_hash ON files(file_hash);
 CREATE INDEX IF NOT EXISTS idx_files_document ON files(document_id);
 CREATE INDEX IF NOT EXISTS idx_pages_document ON pages(document_id);
-""".replace("{pages_columns}", _PAGES_COLUMNS) + FOLDERS_SCHEMA + CHUNKS_SCHEMA
+""".replace("{pages_columns}", _PAGES_COLUMNS) + FOLDERS_SCHEMA + CHUNKS_SCHEMA + FACTS_SCHEMA
 
 # Tables a v1 catalog rebuild may drop. Never "decisions", "ocr_cache" nor
 # "folder_decisions".
 _REBUILT_TABLES = (
-    "chunks_fts", "chunk_vectors", "chunks", "classifications", "embeddings", "sensitive_spans", "pages", "files", "documents"
+    *FACT_TABLES, "chunks_fts", "chunk_vectors", "chunks", "classifications", "embeddings", "sensitive_spans", "pages", "files", "documents"
 )
 
 # v2 -> v3 in place. SQLite cannot change a CHECK constraint with ALTER TABLE,
@@ -197,6 +198,8 @@ class Stats:
     blank_pages: int = 0
     chunks: int = 0
     indexed_documents: int = 0
+    facts: int = 0
+    analysed_documents: int = 0
 
 
 @dataclass(frozen=True)
@@ -225,7 +228,7 @@ def _file_record(row: tuple) -> FileRecord:
     return FileRecord(Path(path), file_hash, size, FileStatus(status), _reason(reason), document_id)
 
 
-class Catalog(FolderStore, ChunkStore):
+class Catalog(FolderStore, ChunkStore, FactStore):
     def __init__(self, db_path: Path) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(db_path)
@@ -247,7 +250,8 @@ class Catalog(FolderStore, ChunkStore):
           ``ocr_cache`` are never dropped.
         * v2 (stage 2a) is upgraded in place: nothing is lost.
         * v3 (stage 2b) -> v4 -> v5 only add the stage 3 and stage 4 tables;
-          v5 -> v6 adds the keyword index and fills it from the existing chunks.
+          v5 -> v6 adds the keyword index and fills it from the existing chunks;
+          v6 -> v7 only adds the stage 5b fact tables.
         """
         version = self._conn.execute("PRAGMA user_version").fetchone()[0]
         has_tables = self._conn.execute(
@@ -255,7 +259,7 @@ class Catalog(FolderStore, ChunkStore):
         ).fetchone()[0]
         if version >= SCHEMA_VERSION or not has_tables:
             return False
-        if version in (3, 4, 5):
+        if version in (3, 4, 5, 6):
             return False  # only new tables: _SCHEMA creates them, __init__ fills chunks_fts
         if version == 2:
             self._conn.commit()
@@ -548,6 +552,8 @@ class Catalog(FolderStore, ChunkStore):
             blank_pages=count("SELECT COUNT(*) FROM pages WHERE status = 'blank'"),
             chunks=count("SELECT COUNT(*) FROM chunks"),
             indexed_documents=count("SELECT COUNT(DISTINCT document_id) FROM chunks"),
+            facts=count("SELECT COUNT(*) FROM facts"),
+            analysed_documents=count("SELECT COUNT(*) FROM fact_runs"),
         )
 
     def duplicate_groups(self) -> list[DuplicateGroup]:
