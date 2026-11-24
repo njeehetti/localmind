@@ -101,7 +101,7 @@ def test_v5_catalog_is_migrated_with_its_chunks_searchable(tmp_path):
     )
     con.close()
     with Catalog(db) as cat:
-        assert cat._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 6
+        assert cat._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 7
         assert cat.keyword_rows('"girafe"', 10) == _ids(cat, ids["a.txt"])[:1]
         assert cat.vector_matrix_rows("m1") == vectors
         assert cat.decision_for("abc") is Decision.ACCEPT

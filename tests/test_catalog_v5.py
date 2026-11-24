@@ -29,7 +29,7 @@ def test_v4_catalog_gains_chunk_tables_and_keeps_data(tmp_path):
     con.executescript("DROP TABLE chunk_vectors; DROP TABLE chunks; PRAGMA user_version = 4;")
     con.close()
     with Catalog(db) as cat:
-        assert cat._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 6
+        assert cat._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 7
         assert cat.decision_for("abc") is Decision.ACCEPT
         assert cat.stats().documents == 1 and cat.stats().chunks == 0
 
