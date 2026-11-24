@@ -256,4 +256,4 @@ def test_public_api_exports_stage4_and_stage5_names():
     for name in ("index", "IndexReport", "search", "Hit", "VectorIndex", "CatalogBusy",
                  "prune", "missing_files", "ChunkConfig", "DocFolder", "FolderFilter", "UnknownFolder"):
         assert name in localmind.__all__ and hasattr(localmind, name)
-    assert localmind.__version__ == "0.4.0"
+    assert localmind.__version__ == "0.5.0"
