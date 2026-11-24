@@ -154,8 +154,8 @@ def _fact(raw: object, doc_type: str, found: PageCandidates, text: str,
     hour: TimeCandidate | None = _tag(raw.get("time"), "H", found, visible)
     _check_same_line(text, amount, when, found)
     if kind == "appointment":
-        if when is None or when.iso is None:
-            raise _Rejected
+        if when is None or when.iso is None or amount is not None:
+            raise _Rejected  # an appointment has a full date and no amount (spec 5.1)
     elif amount is None and when is None:
         raise _Rejected
     elif kind == "bank_movement" and (amount is None or when is None):

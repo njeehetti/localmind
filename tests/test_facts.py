@@ -134,6 +134,16 @@ def test_an_appointment_needs_a_full_date():
     assert [(f.date, f.time, f.place, f.with_whom) for f in kept] == [("2026-12-12", "14:30", "Hôpital Nord", "Dr Martin")]
 
 
+def test_an_appointment_with_an_amount_is_rejected():
+    # found end to end: "Devis accepté le 1er mars 2026 … 1 234,56 €" became an appointment
+    text = "Devis accepté le 1er mars 2026\nMontant total : € 1.234,56"
+    kept, rejected = parse(
+        text,
+        lambda a: [item(kind="appointment", amount=tag(a, "€ 1.234,56"), date=tag(a, "1er mars 2026"))],
+    )
+    assert (kept, rejected) == ([], 1)
+
+
 def test_a_money_fact_needs_an_amount_or_a_date():
     kept, rejected = parse(INVOICE, [item()])
     assert (kept, rejected) == ([], 1)
