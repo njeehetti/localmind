@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 from typing import get_args
 
-from localmind import cli_folders, cli_search
+from localmind import cli_facts, cli_folders, cli_search
 from localmind.catalog import Catalog, Decision, PendingOcr
 from localmind.config import default_db_path, sensitive_policy_from_env
 from localmind.ingest import IngestReport, Outcome, apply_decision, ingest, retry, run_ocr
@@ -171,6 +171,8 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
             reachable = cli_folders.classify_and_review(catalog, resolved, then=then)
         if not args.no_index and reachable:  # Ollama down: the hint above said it all
             cli_search.index_after_ingest(catalog)
+        if not args.no_facts and reachable:
+            cli_facts.facts_after_ingest(catalog)
     return 0
 
 
@@ -191,6 +193,8 @@ def _cmd_stats(args: argparse.Namespace) -> int:
         ("blank pages", s.blank_pages),
         ("chunks", s.chunks),
         ("indexed docs", s.indexed_documents),
+        ("facts", s.facts),
+        ("analysed docs", s.analysed_documents),
     ]
     for label, value in rows:
         print(f"{label + ':':<17}{value}")
@@ -305,6 +309,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument(
         "--no-index", action="store_true", help="do not prepare the documents for search"
     )
+    p_ingest.add_argument(
+        "--no-facts", action="store_true", help="do not read payments, dues and appointments"
+    )
     p_ingest.set_defaults(func=_cmd_ingest)
 
     sub.add_parser("stats", help="catalog summary").set_defaults(func=_cmd_stats)
@@ -335,6 +342,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     cli_folders.register(sub)
     cli_search.register(sub)
+    cli_facts.register(sub)
     return parser
 
 

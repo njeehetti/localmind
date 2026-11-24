@@ -198,6 +198,8 @@ class Stats:
     blank_pages: int = 0
     chunks: int = 0
     indexed_documents: int = 0
+    facts: int = 0
+    analysed_documents: int = 0
 
 
 @dataclass(frozen=True)
@@ -550,6 +552,8 @@ class Catalog(FolderStore, ChunkStore, FactStore):
             blank_pages=count("SELECT COUNT(*) FROM pages WHERE status = 'blank'"),
             chunks=count("SELECT COUNT(*) FROM chunks"),
             indexed_documents=count("SELECT COUNT(DISTINCT document_id) FROM chunks"),
+            facts=count("SELECT COUNT(*) FROM facts"),
+            analysed_documents=count("SELECT COUNT(*) FROM fact_runs"),
         )
 
     def duplicate_groups(self) -> list[DuplicateGroup]:

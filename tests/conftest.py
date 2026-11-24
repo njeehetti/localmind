@@ -2,7 +2,7 @@
 
 import pytest
 
-from localmind import cli_folders, cli_search
+from localmind import cli_facts, cli_folders, cli_search
 from tests.fake_classifier import FakeClassifier
 
 
@@ -13,3 +13,6 @@ def no_real_ollama(monkeypatch):
     ``make_embedder`` again."""
     monkeypatch.setattr(cli_folders, "make_classifier", lambda: FakeClassifier(unavailable=True))
     monkeypatch.setattr(cli_search, "make_embedder", lambda: FakeClassifier(unavailable=True))
+    monkeypatch.setattr(  # reads nothing: earlier stages' outputs stay unchanged
+        cli_facts, "make_llm", lambda: FakeClassifier(answers=lambda p: {"document_type": "other", "facts": []})
+    )
