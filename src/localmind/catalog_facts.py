@@ -17,7 +17,7 @@ Every amount and date carries its span in the masked page text: provenance.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
@@ -115,6 +115,31 @@ class FactRun:
     capped: bool
 
 
+@dataclass(frozen=True)
+class FactRow:
+    id: int
+    document_id: int
+    page_no: int
+    kind: str  # as stored (the query decides the effective kind)
+    amount_cents: int | None
+    currency: str | None
+    date: str | None
+    day_of_month: int | None
+    time: str | None
+    counterparty: str | None
+    counterparty_key: str
+    method: str | None
+    place: str | None
+    with_whom: str | None
+    label: str | None
+
+
+_FACT_COLUMNS = (
+    "id, document_id, page_no, kind, amount_cents, currency, date, day_of_month, time, "
+    "counterparty, counterparty_key, method, place, with_whom, label"
+)
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
@@ -168,6 +193,58 @@ class FactStore:
             (document_id,),
         )
         return [r[0] for r in rows]
+
+    def fact_rows(
+        self,
+        document_ids: Collection[int] | None = None,
+        counterparty: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        dated_only: bool = False,
+    ) -> list[FactRow]:
+        """Stored facts, filtered in SQL. ``counterparty`` is a substring of the
+        matching key; dates are ISO strings, both ends included."""
+        where, args = ["1"], []
+        if document_ids is not None:
+            ids = sorted(document_ids)
+            where.append(f"document_id IN ({', '.join('?' * len(ids))})" if ids else "0")
+            args.extend(ids)
+        if counterparty:
+            where.append("instr(counterparty_key, ?) > 0")
+            args.append(counterparty)
+        if dated_only:
+            where.append("date IS NOT NULL")
+        if date_from:
+            where.append("date >= ?")
+            args.append(date_from)
+        if date_to:
+            where.append("date <= ?")
+            args.append(date_to)
+        rows = self._conn.execute(  # type: ignore[attr-defined]
+            f"SELECT {_FACT_COLUMNS} FROM facts WHERE {' AND '.join(where)} ORDER BY id", args
+        )
+        return [FactRow(*r) for r in rows]
+
+    def coverage_counts(self, prompt_version: str, document_ids: Collection[int] | None = None) -> tuple[int, int, int]:
+        """``(missing, incomplete, failed)`` among documents with usable text:
+        missing = no run for ``prompt_version`` (any model)."""
+        rows = self._conn.execute(  # type: ignore[attr-defined]
+            """SELECT d.id, r.prompt_version, r.status FROM documents d
+               LEFT JOIN fact_runs r ON r.document_id = d.id
+               WHERE EXISTS (SELECT 1 FROM files f WHERE f.document_id = d.id AND f.status = 'indexed')
+                 AND EXISTS (SELECT 1 FROM pages p WHERE p.document_id = d.id AND p.status = 'ok')"""
+        )
+        missing = incomplete = failed = 0
+        for doc_id, version, status in rows:
+            if document_ids is not None and doc_id not in document_ids:
+                continue
+            if version != prompt_version:
+                missing += 1
+            elif status == "incomplete":
+                incomplete += 1
+            elif status == "failed":
+                failed += 1
+        return missing, incomplete, failed
 
     def fact_page_numbers(self, document_id: int) -> list[int]:
         """Page number of each stored fact of the document (one entry per fact)."""
